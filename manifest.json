@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Async Connections Organizer Automatic",
+  "version": "1.0",
+  "description": "Automatically organizes/grabs connections",
+  
+  "permissions": [
+    "activeTab",
+    "storage", 
+    "downloads",
+    "scripting",
+    "alarms",
+    "offscreen",
+    "power",
+    "idle",
+    "system.cpu"
+  ],
+  
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.linkedin.com/*",
+        "file://*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  
+  "background": {
+    "service_worker": "background.js"
+  },
+  
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LinkedIn Auto Scraper"
+  },
+  
+  "host_permissions": [
+    "*://*.linkedin.com/*",
+    "https://us-central1-linkedin-connections-tracker.cloudfunctions.net/*"
+  ]
+}

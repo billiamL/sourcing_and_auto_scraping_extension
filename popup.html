@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 340px;
+      padding: 0;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #2a2a2a;
+      color: #ffffff;
+      overflow: hidden;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+      padding: 20px;
+      text-align: center;
+      border-bottom: 1px solid #3a3a3a;
+    }
+    
+    .header h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+      letter-spacing: 0.5px;
+    }
+    
+    .subtitle {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-top: 4px;
+      letter-spacing: 0.3px;
+    }
+    
+    .content {
+      padding: 20px;
+    }
+    
+    .status {
+      background: rgba(74, 222, 128, 0.1);
+      border: 1px solid rgba(74, 222, 128, 0.2);
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 16px;
+      font-size: 12px;
+      color: #4ade80;
+    }
+    
+    .status.error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+    }
+    
+    .status.working {
+      background: rgba(251, 191, 36, 0.1);
+      border: 1px solid rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    
+    .stat-card {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid #3a3a3a;
+      border-radius: 6px;
+      padding: 12px;
+      text-align: center;
+    }
+    
+    .stat-number {
+      font-size: 20px;
+      font-weight: 700;
+      color: #4ade80;
+      margin-bottom: 2px;
+    }
+    
+    .stat-label {
+      font-size: 10px;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .button {
+      width: 100%;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 8px;
+      transition: all 0.2s ease;
+      background: rgba(74, 222, 128, 0.1);
+      color: #4ade80;
+      border: 1px solid rgba(74, 222, 128, 0.2);
+    }
+    
+    .button:hover {
+      background: rgba(74, 222, 128, 0.2);
+      border-color: rgba(74, 222, 128, 0.3);
+      transform: translateY(-1px);
+    }
+    
+    .button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .button.primary {
+      background: #4ade80;
+      color: #1a1a1a;
+      border: 1px solid #4ade80;
+      font-weight: 600;
+    }
+    
+    .button.primary:hover {
+      background: #22c55e;
+      border-color: #22c55e;
+    }
+    
+    .button.auto {
+      background: rgba(168, 85, 247, 0.1);
+      color: #a855f7;
+      border: 1px solid rgba(168, 85, 247, 0.2);
+    }
+    
+    .button.auto:hover {
+      background: rgba(168, 85, 247, 0.2);
+      border-color: rgba(168, 85, 247, 0.3);
+    }
+    
+    .button.auto.running {
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    
+    .button.auto.running:hover {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    
+    .button.danger {
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    
+    .button.danger:hover {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    
+    .button.secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: #d1d5db;
+      border: 1px solid #3a3a3a;
+    }
+    
+    .button.secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: #4a4a4a;
+    }
+    
+    .divider {
+      height: 1px;
+      background: #3a3a3a;
+      margin: 16px 0;
+    }
+    
+    .file-info {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 4px;
+      padding: 8px;
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 12px;
+      border-left: 3px solid #4ade80;
+    }
+    
+    .keyboard-hint {
+      font-size: 10px;
+      color: #6b7280;
+      text-align: center;
+      margin-top: 12px;
+      padding: 8px;
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 4px;
+    }
+    
+    .keyboard-hint code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 4px;
+      border-radius: 2px;
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      color: #4ade80;
+    }
+    
+    .auto-section {
+      border-top: 1px solid #3a3a3a;
+      margin-top: 16px;
+      padding-top: 16px;
+    }
+    
+    .section-title {
+      font-size: 11px;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .expand-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      color: #9ca3af;
+      font-size: 10px;
+      padding: 2px 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .expand-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    
+    .expand-btn.expanded {
+      transform: rotate(180deg);
+    }
+    
+    .url-input {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid #3a3a3a;
+      border-radius: 6px;
+      padding: 8px;
+      color: #ffffff;
+      font-size: 11px;
+      font-family: monospace;
+      resize: vertical;
+      margin-bottom: 12px;
+    }
+    
+    .url-input::placeholder {
+      color: #6b7280;
+    }
+    
+    .queue-status {
+      background: rgba(168, 85, 247, 0.1);
+      border: 1px solid rgba(168, 85, 247, 0.2);
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .queue-info {
+      color: #a855f7;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    
+    .break-timer {
+      color: #fbbf24;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .timer-btn {
+      background: rgba(251, 191, 36, 0.2);
+      border: 1px solid rgba(251, 191, 36, 0.3);
+      border-radius: 4px;
+      color: #fbbf24;
+      font-size: 10px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+    
+    .timer-btn:hover {
+      background: rgba(251, 191, 36, 0.3);
+    }
+    
+    .timer-input {
+      background: rgba(251, 191, 36, 0.1);
+      border: 1px solid rgba(251, 191, 36, 0.3);
+      border-radius: 4px;
+      color: #fbbf24;
+      font-size: 10px;
+      padding: 4px 6px;
+      width: 50px;
+      text-align: center;
+    }
+    
+    .timer-input:focus {
+      outline: none;
+      border-color: rgba(251, 191, 36, 0.5);
+      background: rgba(251, 191, 36, 0.2);
+    }
+    
+    .settings-section {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #3a3a3a;
+    }
+    
+    .setting-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #d1d5db;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    
+    .setting-item input[type="checkbox"] {
+      accent-color: #4ade80;
+    }
+    
+    .queue-controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    
+    .queue-controls .button {
+      flex: 1;
+    }
+    
+    .button.small {
+      padding: 6px 12px;
+      font-size: 11px;
+    }
+    
+    .queue-list {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid #3a3a3a;
+      border-radius: 6px;
+      margin-top: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .queue-list-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid #3a3a3a;
+      font-size: 11px;
+      color: #9ca3af;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    
+    .queue-items {
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    
+    /* DRAGGABLE QUEUE STYLES - NEW */
+    .queue-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 11px;
+      cursor: move;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+    
+    .queue-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    
+    .queue-item:last-child {
+      border-bottom: none;
+    }
+    
+    .queue-item.dragging {
+      opacity: 0.5;
+      transform: rotate(2deg);
+      background: rgba(168, 85, 247, 0.1);
+      z-index: 1000;
+    }
+    
+    .queue-item.drag-over {
+      border-top: 2px solid #a855f7;
+      background: rgba(168, 85, 247, 0.1);
+    }
+    
+    .queue-item.processing {
+      border-left: 3px solid #fbbf24;
+      background: rgba(251, 191, 36, 0.1);
+      cursor: not-allowed;
+    }
+    
+    .queue-item.completed {
+      opacity: 0.6;
+      cursor: default;
+    }
+    
+    .queue-item.failed {
+      opacity: 0.7;
+      border-left: 2px solid #ef4444;
+    }
+    
+    .drag-handle {
+      margin-right: 8px;
+      color: #6b7280;
+      cursor: grab;
+      font-size: 12px;
+      user-select: none;
+    }
+    
+    .drag-handle:hover {
+      color: #9ca3af;
+    }
+    
+    .queue-item.processing .drag-handle,
+    .queue-item.completed .drag-handle {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+    
+    .queue-item-status {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
+    
+    .queue-item-status.pending {
+      background: #6b7280;
+    }
+    
+    .queue-item-status.processing {
+      background: #fbbf24;
+      animation: pulse 2s infinite;
+    }
+    
+    .queue-item-status.completed {
+      background: #4ade80;
+    }
+    
+    .queue-item-status.failed {
+      background: #ef4444;
+    }
+    
+    .queue-item-url {
+      flex: 1;
+      color: #d1d5db;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .queue-item-count {
+      color: #9ca3af;
+      font-size: 10px;
+      margin-left: 8px;
+    }
+    
+    .queue-reorder-hint {
+      text-align: center;
+      font-size: 10px;
+      color: #6b7280;
+      padding: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* MODAL STYLES - NEW */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      animation: modalFadeIn 0.2s ease-out;
+    }
+
+    @keyframes modalFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .modal-content {
+      background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+      border: 1px solid #3a3a3a;
+      border-radius: 8px;
+      width: 320px;
+      max-height: 90vh;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      animation: modalSlideIn 0.3s ease-out;
+    }
+
+    @keyframes modalSlideIn {
+      from { 
+        opacity: 0;
+        transform: translateY(-20px) scale(0.95);
+      }
+      to { 
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #3a3a3a;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .modal-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      color: #9ca3af;
+      cursor: pointer;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+    }
+
+    .modal-close:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+    }
+
+    .modal-body {
+      padding: 20px;
+    }
+
+    .modal-item-info {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 20px;
+      border-left: 3px solid #4ade80;
+    }
+
+    .modal-item-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 4px;
+    }
+
+    .modal-item-url {
+      font-size: 11px;
+      color: #9ca3af;
+      font-family: monospace;
+      margin-bottom: 6px;
+      word-break: break-all;
+    }
+
+    .modal-item-status {
+      font-size: 11px;
+      color: #6b7280;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .modal-item-status.pending { color: #6b7280; }
+    .modal-item-status.processing { color: #fbbf24; }
+    .modal-item-status.completed { color: #4ade80; }
+    .modal-item-status.failed { color: #ef4444; }
+
+    .modal-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .modal-actions .button {
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>LinkedIn Scraper</h2>
+    <div class="subtitle">Manual + Auto Collection</div>
+  </div>
+  
+  <div class="content">
+    <div class="status" id="status">
+      Ready to scrape
+    </div>
+    
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number" id="connectionsCount">0</div>
+        <div class="stat-label">My Connections</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="extractedCount">0</div>
+        <div class="stat-label">Total Extracted</div>
+      </div>
+    </div>
+    
+    <div class="file-info" id="fileInfo" style="display: none;">
+      Data in memory - click Export to save as linkedin_connections.csv
+    </div>
+    
+    <!-- Manual Controls -->
+    <div class="section-title">Manual Collection</div>
+    
+    <button class="button primary" id="grabMyConnections">
+      Grab My Connections
+    </button>
+    
+    <button class="button primary" id="grab2ndConnections" disabled>
+      Grab 2nd Degree Connections
+    </button>
+    
+    <!-- Queue System -->
+    <div class="auto-section">
+      <div class="section-title">
+        Queue System
+        <button class="expand-btn" id="expandQueue">▼</button>
+      </div>
+      
+      <div class="queue-status" id="queueStatus" style="display: none;">
+        <div class="queue-info">
+          <span id="queueProgress">0 / 0</span> completed
+        </div>
+        <div class="break-timer" id="breakTimer" style="display: none;">
+          Break: <span id="breakTimeLeft">5:00</span>
+          <button class="timer-btn" id="skipBreak">Skip</button>
+          <input type="number" id="breakMinutesInput" class="timer-input" min="1" max="999" placeholder="min">
+          <button class="timer-btn" id="setBreakTime">Set</button>
+        </div>
+      </div>
+      
+      <div class="queue-input-section" id="queueInputSection" style="display: none;">
+        <textarea id="urlQueue" placeholder="Paste LinkedIn URLs (one per line)
+
+Profile URLs (preferred):
+https://www.linkedin.com/in/john-smith/
+https://www.linkedin.com/in/jane-doe/
+
+Or Connection Search URLs:
+https://www.linkedin.com/search/results/people/?connectionOf=..." 
+          rows="8" class="url-input"></textarea>
+        
+        <div class="queue-controls">
+          <button class="button auto" id="startQueueAutomation">
+            Start Queue Automation
+          </button>
+          <button class="button secondary" id="resumeQueue" style="display: none;">
+            Resume Queue
+          </button>
+          <button class="button secondary" id="clearQueue">
+            Clear Queue
+          </button>
+        </div>
+        
+        <div class="queue-list" id="queueList" style="display: none;">
+          <div class="queue-list-header">
+            <span>Queue Status</span>
+            <button class="button secondary small" id="collapseQueue">▲</button>
+          </div>
+          <div class="queue-items" id="queueItems"></div>
+          <div class="queue-reorder-hint">Drag items to reorder • Processing/completed items cannot be moved</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Single Page Automation -->
+    <div class="auto-section">
+      <div class="section-title">Single Page</div>
+      
+      <button class="button auto" id="startAutomation">
+        Start Auto Collection
+      </button>
+    </div>
+    
+    <div class="divider"></div>
+    
+    <!-- Settings -->
+    <div class="settings-section">
+      <label class="setting-item">
+        <input type="checkbox" id="showNotifications" checked>
+        <span>Show notifications</span>
+      </label>
+    </div>
+      
+      <!-- Utility Actions -->
+      <button class="button" id="pushToDatabase">
+        Push Data to Database
+      </button>
+
+      <button class="button" id="exportData">
+        Export All Data to CSV
+      </button>
+      
+      <button class="button secondary" id="debugPage">
+        Debug Page
+      </button>
+      
+      <button class="button secondary" id="clearMemory">
+        Clear Memory Only
+      </button>
+      
+      <button class="button danger" id="clearData">
+        Clear All Data
+      </button>
+    </div>
+    
+    <div class="keyboard-hint">
+      Manual: <code>`</code> | Auto: <code>Shift + `</code>
+    </div>
+  </div>
+
+  <!-- Queue Item Action Modal -->
+  <div class="modal-overlay" id="queueItemModal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modalTitle">Queue Item Actions</h3>
+        <button class="modal-close" id="closeModal">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-item-info">
+          <div class="modal-item-name" id="modalItemName">Person Name</div>
+          <div class="modal-item-url" id="modalItemUrl">URL</div>
+          <div class="modal-item-status" id="modalItemStatus">Status: Pending</div>
+        </div>
+        <div class="modal-actions">
+          <button class="button primary" id="jumpToItem">
+            Start Scraping From Here
+          </button>
+          <button class="button danger" id="deleteItem">
+            Remove From Queue
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
