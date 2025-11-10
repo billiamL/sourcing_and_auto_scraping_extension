@@ -273,15 +273,14 @@ class LinkedInScraperBrain {
     this.queue.isRunning = true;
 
     try {
-      // Create scraper window if needed
+      // Create scraper tab if needed
       if (!this.scraperTabId) {
-        const window = await chrome.windows.create({
+        const tab = await chrome.tabs.create({
           url: 'https://www.linkedin.com',
-          type: 'normal',
-          state: 'minimized'
+          active: false
         });
-        this.scraperWindowId = window.id;
-        this.scraperTabId = window.tabs[0].id;
+        this.scraperTabId = tab.id;
+        this.scraperWindowId = tab.windowId;
       }
 
       await this.startSilentAudio();
@@ -362,6 +361,15 @@ class LinkedInScraperBrain {
         await this.navigateTab(finalUrl);
         await this.delay(3000); // Wait for page load
         
+        // Wait for profile page to be ready
+        const profileReady = await this.sendCommandToHand(this.scraperTabId, {
+          action: 'waitForPageReady'
+        });
+        
+        if (!profileReady?.success) {
+          console.warn('Profile page not ready, continuing anyway');
+        }
+        
         // Get connections URL from profile
         const connectionsResult = await this.sendCommandToHand(this.scraperTabId, {
           action: 'findConnectionsUrl'
@@ -380,6 +388,15 @@ class LinkedInScraperBrain {
       // Step 2: Navigate to final URL (connections search page)
       await this.navigateTab(finalUrl);
       await this.delay(3000);
+      
+      // Wait for search page to be ready before extraction
+      const searchReady = await this.sendCommandToHand(this.scraperTabId, {
+        action: 'waitForPageReady'
+      });
+      
+      if (!searchReady?.success) {
+        console.warn('Search page not ready after navigation, continuing anyway');
+      }
       
       // Step 3: Run single-page automation on this URL
       let totalProfiles = 0;
@@ -428,6 +445,16 @@ class LinkedInScraperBrain {
         if (!nextResult?.success) break;
         
         await this.delay(2000 + Math.random() * 2000);
+        
+        // Wait for next page to be ready
+        const nextPageReady = await this.sendCommandToHand(this.scraperTabId, {
+          action: 'waitForPageReady'
+        });
+        
+        if (!nextPageReady?.success) {
+          console.warn('Next page not ready, continuing anyway');
+        }
+        
         currentPage++;
       }
       
@@ -734,14 +761,6 @@ class LinkedInScraperBrain {
     this.queue.breakEndTime = null;
     
     await this.stopSilentAudio();
-    
-    if (this.scraperWindowId) {
-      try {
-        await chrome.windows.remove(this.scraperWindowId);
-      } catch (e) {
-        // Window may already be closed
-      }
-    }
     
     this.scraperWindowId = null;
     this.scraperTabId = null;
