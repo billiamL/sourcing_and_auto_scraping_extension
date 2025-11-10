@@ -380,115 +380,61 @@ class LinkedInScraperHand {
   extractFromSearchResults() {
     const profiles = [];
     
-    const containerSelectors = '.presence-entity.presence-entity--size-3, [data-view-name="search-entity-result-universal-template"], [data-chameleon-result-urn], .reusable-search__entity-result, .entity-result, .search-result';
-    const resultContainers = document.querySelectorAll(containerSelectors);
-    
-    const validNamesMap = new Map();
+    // UPDATED: Use new stable data-view-name selector
+    const resultContainers = document.querySelectorAll('div[data-view-name="people-search-result"]');
     
     console.log(`Found ${resultContainers.length} search result containers`);
     
-    // Build valid names map from images and ghost entities
-    const ghostSelectors = [
-      '.EntityPhoto-circle-3-ghost-person .visually-hidden',
-      '.ivm-view-attr__ghost-entity .visually-hidden',
-      '.EntityPhoto-circle-3-ghost-person.ivm-view-attr__ghost-entity .visually-hidden'
-    ];
-    
-    for (let container of resultContainers) {
-      const img = container.querySelector('img[alt]');
-      if (img && img.alt && img.alt.trim()) {
-        let name = img.alt.trim().replace(/\s+(is\s+open\s+to\s+work|open\s+to\s+work).*$/i, '');
-        validNamesMap.set(name.toLowerCase(), name);
-      } else {
-        for (let selector of ghostSelectors) {
-          const ghostPerson = container.querySelector(selector);
-          if (ghostPerson && ghostPerson.textContent.trim()) {
-            let name = ghostPerson.textContent.trim().replace(/\s+(is\s+open\s+to\s+work|open\s+to\s+work).*$/i, '');
-            validNamesMap.set(name.toLowerCase(), name);
-            break;
-          }
-        }
-        
-        const profileLinks = container.querySelectorAll('a[href*="/in/"] span[aria-hidden="true"]');
-        for (let link of profileLinks) {
-          const text = link.textContent?.trim();
-          if (text && text.length > 2 && text.length < 100 && 
-              !text.toLowerCase().includes('view') && 
-              !text.toLowerCase().includes('profile') &&
-              !text.toLowerCase().includes('degree') &&
-              !text.toLowerCase().includes('•')) {
-            let name = text.replace(/\s+(is\s+open\s+to\s+work|open\s+to\s+work).*$/i, '');
-            if (name && name.length > 2) {
-              validNamesMap.set(name.toLowerCase(), name);
-              break;
-            }
-          }
-        }
-      }
-    }
-    
-    console.log(`Built valid names map with ${validNamesMap.size} entries`);
-    
-    // Extract profiles and match with valid names
-    const profileLinks = document.querySelectorAll('a[href*="/in/"][href*="linkedin.com"]');
-    console.log(`Found ${profileLinks.length} profile links`);
-    
     const processedUrls = new Set();
     
-    for (let link of profileLinks) {
+    // UPDATED: New extraction logic based on current LinkedIn structure
+    for (let card of resultContainers) {
       try {
-        const href = link.getAttribute('href');
-        if (!href || !href.includes('/in/')) continue;
-        
-        const profileUrl = href.split('?')[0].split('#')[0];
-        if (processedUrls.has(profileUrl)) continue;
-        processedUrls.add(profileUrl);
-        
-        let extractedName = this.findNameForProfile(link, profileUrl);
-        if (!extractedName) continue;
-        
-        extractedName = extractedName.replace(/\s+(is\s+open\s+to\s+work|open\s+to\s+work).*$/i, '');
-        
-        const matchedValidName = this.findMatchingValidName(extractedName, validNamesMap);
-        
-        if (matchedValidName) {
-          const mutualInfo = this.findMutualConnectionsInfo(link);
-          
-          let finalMutualInfo = mutualInfo;
-          if (!finalMutualInfo) {
-            for (let container of resultContainers) {
-              const img = container.querySelector('img[alt]');
-              const ghostPerson = container.querySelector('.EntityPhoto-circle-3-ghost-person .visually-hidden, .ivm-view-attr__ghost-entity .visually-hidden');
-              const linkText = container.querySelector('a[href*="/in/"] span[aria-hidden="true"]');
-              
-              let containerName = '';
-              if (img && img.alt.trim()) {
-                containerName = img.alt.trim();
-              } else if (ghostPerson && ghostPerson.textContent.trim()) {
-                containerName = ghostPerson.textContent.trim();
-              } else if (linkText && linkText.textContent.trim()) {
-                containerName = linkText.textContent.trim();
-              }
-              
-              if (containerName && containerName.toLowerCase() === matchedValidName.toLowerCase()) {
-                finalMutualInfo = this.findMutualConnectionsForContainer(container);
-                if (finalMutualInfo) {
-                  break;
-                }
-              }
-            }
-          }
-          
-          profiles.push({ 
-            name: matchedValidName,
-            url: profileUrl,
-            mutualConnections: finalMutualInfo || ''
-          });
-          
-          console.log(`${matchedValidName} -> ${profileUrl} (${finalMutualInfo || 'No mutual connections'})`);
+        const linkElement = card.querySelector('a[data-view-name="search-result-lockup-title"]');
+        if (!linkElement) continue;
+
+        // Extract URL and clean it
+        let profileUrl;
+        try {
+          profileUrl = new URL(linkElement.href).pathname;
+        } catch (e) {
+          // Fallback for relative URLs
+          profileUrl = linkElement.getAttribute('href').split('?')[0].split('#')[0];
         }
         
+        if (processedUrls.has(profileUrl)) continue;
+        processedUrls.add(profileUrl);
+
+        let name = '';
+        // Method 1: Get name from the image alt text (most reliable)
+        const img = card.querySelector('img[alt]');
+        if (img && img.alt) {
+          name = img.alt.trim();
+        }
+
+        // Method 2: Fallback to the link's text content
+        if (!name && linkElement.textContent) {
+          name = linkElement.textContent.trim().replace(/•.*/, '').trim();
+        }
+        
+        if (!name) continue; // Skip if no name found
+
+        // Get mutual connections info using new helper
+        const mutualConnections = this.findMutualConnectionsInfoNew(card);
+
+        // Ensure full URL
+        const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+
+        profiles.push({
+          name: name,
+          url: fullUrl,
+          mutualConnections: mutualConnections
+        });
+        
+        console.log(`${name} -> ${fullUrl} (${mutualConnections || 'No mutual connections'})`);
+
       } catch (error) {
+        console.warn('Error processing a result card:', error);
         continue;
       }
     }
@@ -699,6 +645,20 @@ class LinkedInScraperHand {
     }
   }
 
+  // NEW: Helper function for updated LinkedIn structure
+  findMutualConnectionsInfoNew(card) {
+    // The new container for mutual insights has a very generic class. We target it structurally.
+    const mutualInsightContainer = card.querySelector('div.ab54df51');
+    if (mutualInsightContainer) {
+      const textElement = mutualInsightContainer.querySelector('p');
+      if (textElement) {
+        // The full descriptive text is more useful and robust to extract than just a number.
+        return textElement.textContent.trim().replace(/\s\s+/g, ' ');
+      }
+    }
+    return ''; // Return empty string if not found
+  }
+
   extractFromConnectionsList() {
     const profiles = [];
     
@@ -861,18 +821,13 @@ class LinkedInScraperHand {
   }
 
   isLastPage() {
-    const nextButton = document.querySelector('button[aria-label="Next"], .artdeco-pagination__button--next');
-    const isDisabled = nextButton && (nextButton.disabled || nextButton.classList.contains('artdeco-button--disabled'));
-    
-    const currentPage = this.getCurrentPageNumber();
-    const maxPage = this.getMaxPageNumber();
-    const isMaxPage = maxPage && currentPage >= maxPage;
+    // UPDATED: Use new data-testid selector for pagination
+    const nextButton = document.querySelector('button[data-testid="pagination-controls-next-button-visible"]');
+    const isDisabled = !nextButton || nextButton.hasAttribute('disabled');
     
     return {
       success: true,
-      isLastPage: isDisabled || isMaxPage,
-      currentPage: currentPage,
-      maxPage: maxPage
+      isLastPage: isDisabled
     };
   }
 
@@ -901,27 +856,8 @@ class LinkedInScraperHand {
     
     await this.delay(300);
     
-    const nextSelectors = [
-      'button[aria-label="Next"]:not([disabled])',
-      '.artdeco-pagination__button--next:not([disabled])',
-      '.artdeco-pagination button:last-child:not([disabled])'
-    ];
-    
-    let nextButton = null;
-    
-    for (let selector of nextSelectors) {
-      nextButton = document.querySelector(selector);
-      if (nextButton && !nextButton.disabled && !nextButton.classList.contains('artdeco-button--disabled')) {
-        break;
-      }
-      nextButton = null;
-    }
-    
-    if (!nextButton) {
-      const xpath = "//button[contains(text(), 'Next') and not(@disabled)]";
-      const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-      nextButton = result.singleNodeValue;
-    }
+    // UPDATED: Use new data-testid selector for pagination
+    const nextButton = document.querySelector('button[data-testid="pagination-controls-next-button-visible"]:not([disabled])');
     
     if (!nextButton || nextButton.disabled || nextButton.classList.contains('artdeco-button--disabled')) {
       console.log('Next button not found or disabled');
