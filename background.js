@@ -1,5 +1,5 @@
-const SUPABASE_URL = 'https://iqeopislujokppaflnoc.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxZW9waXNsdWpva3BwYWZsbm9jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg3ODA2OTgsImV4cCI6MjA3NDM1NjY5OH0.AHzzpRt_5C5dxWNP6aW2qLHpMO09Q5MJugQXWPiVijY';
+const SUPABASE_URL = 'https://bdrfejnmngaudrlwvjhh.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkcmZlam5tbmdhdWRybHd2amhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4MzczMTYsImV4cCI6MjA4OTQxMzMxNn0.IAa_fys5txDd01-JnVLdrKVCScqJFoL_BkJ9jorWQq0';
 const SUPABASE_TABLE = 'linkedin_connections';
 
 const OFFSCREEN_DOCUMENT_PATH = '/offscreen.html';
@@ -70,6 +70,9 @@ class LinkedInScraperBrain {
           break;
         case 'stopQueue':
           result = await this.stopQueueAutomation();
+          break;
+        case 'addToQueue':
+          result = await this.addToQueue(request.newItems);
           break;
         case 'clearQueue':
           result = await this.clearQueue();
@@ -193,10 +196,11 @@ class LinkedInScraperBrain {
             source: extractResult.sourceConnection || 'Unknown',
             name: profile.name,
             url: profile.url,
+            headline: profile.headline || '',
             mutualConnections: profile.mutualConnections || '',
             timestamp: new Date().toISOString()
           }));
-          
+
           await this.saveExtractedData(dataToSave);
           this.singlePageState.totalConnections += extractResult.data.length;
           this.singlePageState.stagnationCount = 0;
@@ -256,6 +260,24 @@ class LinkedInScraperBrain {
   // QUEUE AUTOMATION - BRAIN ORCHESTRATED  
   // =============================================
 
+  async addToQueue(newItems) {
+    if (!newItems || newItems.length === 0) {
+      return { success: false, error: 'No items to add' };
+    }
+
+    const existingUrls = new Set(this.queue.items.map(item => item.url));
+    const uniqueItems = newItems.filter(item => !existingUrls.has(item.url));
+
+    if (uniqueItems.length === 0) {
+      return { success: false, error: 'All URLs already in queue' };
+    }
+
+    this.queue.items.push(...uniqueItems);
+    await this.saveQueue();
+
+    return { success: true, added: uniqueItems.length, total: this.queue.items.length };
+  }
+
   async startQueueAutomation(queueItems) {
     if (this.queue.isRunning) {
       return { success: false, error: 'Queue already running' };
@@ -273,7 +295,17 @@ class LinkedInScraperBrain {
     this.queue.isRunning = true;
 
     try {
-      // Create scraper tab if needed
+      // Validate existing scraper tab or create a new one
+      if (this.scraperTabId) {
+        try {
+          await chrome.tabs.get(this.scraperTabId);
+        } catch {
+          console.log('Persisted scraper tab no longer exists, creating new one');
+          this.scraperTabId = null;
+          this.scraperWindowId = null;
+        }
+      }
+
       if (!this.scraperTabId) {
         const tab = await chrome.tabs.create({
           url: 'https://www.linkedin.com',
@@ -281,6 +313,8 @@ class LinkedInScraperBrain {
         });
         this.scraperTabId = tab.id;
         this.scraperWindowId = tab.windowId;
+        // Wait for initial page load before proceeding
+        await this.delay(3000);
       }
 
       await this.startSilentAudio();
@@ -423,10 +457,11 @@ class LinkedInScraperBrain {
             source: sourceName || 'Unknown',
             name: profile.name,
             url: profile.url,
+            headline: profile.headline || '',
             mutualConnections: profile.mutualConnections || '',
             timestamp: new Date().toISOString()
           }));
-          
+
           await this.saveExtractedData(dataToSave);
           totalProfiles += extractResult.data.length;
         }
@@ -555,6 +590,7 @@ class LinkedInScraperBrain {
         source: profile.source || null,
         name: profile.name || null,
         profile_url: profile.url || null,
+        headline: profile.headline || null,
         mutual_connections: profile.mutualConnections || null,
         extracted_at: profile.lastScrapedAt || profile.timestamp || new Date().toISOString(),
         raw_data: JSON.stringify(profile)

@@ -81,6 +81,7 @@ class LinkedInScraperPopup {
       breakMinutesInput: document.getElementById('breakMinutesInput'),
       setBreakTime: document.getElementById('setBreakTime'),
       startQueueAutomation: document.getElementById('startQueueAutomation'),
+      addToQueue: document.getElementById('addToQueue'),
       resumeQueue: document.getElementById('resumeQueue'),
       clearQueue: document.getElementById('clearQueue'),
       queueList: document.getElementById('queueList'),
@@ -121,6 +122,9 @@ class LinkedInScraperPopup {
     // Queue system - UPDATED to communicate with background
     this.elements.expandQueue.addEventListener('click', () => this.toggleQueueExpansion());
     this.elements.startQueueAutomation.addEventListener('click', () => this.toggleQueueAutomation());
+    if (this.elements.addToQueue) {
+      this.elements.addToQueue.addEventListener('click', () => this.addToQueue());
+    }
     if (this.elements.resumeQueue) {
       this.elements.resumeQueue.addEventListener('click', () => this.resumeQueue());
     }
@@ -204,15 +208,17 @@ class LinkedInScraperPopup {
       const response = await chrome.runtime.sendMessage({ action: 'getQueueStatus' });
       if (response && response.success) {
         this.queue = response.queue;
-        
+
         if (this.queue.breakEndTime && this.queue.breakEndTime > Date.now()) {
           this.startBreakDisplayTimer();
         }
-        
+
         console.log(`Loaded queue status: ${this.queue.items.length} items, running: ${this.queue.isRunning}`);
       }
     } catch (error) {
-      console.error('Error loading queue status:', error);
+      if (!error.message?.includes('Could not establish connection')) {
+        console.error('Error loading queue status:', error);
+      }
     }
   }
 
@@ -229,42 +235,51 @@ class LinkedInScraperPopup {
       console.log('Queue operation already in progress');
       return;
     }
-    
+
     this.busy.queueOperation = true;
-    
+
     try {
+      // Sync latest state from background before starting
+      await this.loadQueueStatus();
+
       const urlText = this.elements.urlQueue.value.trim();
       let queueItems = [...this.queue.items];
-      
+
       if (urlText) {
         const newUrls = this.parseUrls(urlText);
         if (newUrls.length === 0) {
           this.setStatus('error', 'No valid LinkedIn URLs found');
           return;
         }
-        
+
         const existingUrls = new Set(queueItems.map(item => item.url));
         const uniqueUrls = newUrls.filter(item => !existingUrls.has(item.url));
-        
+
         if (uniqueUrls.length === 0) {
           this.setStatus('error', 'All URLs already in queue');
           return;
         }
-        
+
         queueItems.push(...uniqueUrls);
         this.elements.urlQueue.value = '';
       }
-      
+
       if (queueItems.length === 0) {
         this.setStatus('error', 'Please enter URLs to process');
         return;
       }
+
+      const hasPending = queueItems.some(item => item.status === 'pending' || item.status === 'failed');
+      if (!hasPending) {
+        this.setStatus('error', 'No pending items — add new URLs first');
+        return;
+      }
       
-      const response = await chrome.runtime.sendMessage({
+      const response = await this.chromeAPI(() => chrome.runtime.sendMessage({
         action: 'startQueue',
         queueItems: queueItems
-      });
-      
+      }));
+
       if (response && response.success) {
         this.setStatus('working', `Queue started (${queueItems.length} URLs)`);
         await this.loadQueueStatus();
@@ -272,10 +287,13 @@ class LinkedInScraperPopup {
       } else {
         throw new Error(response?.error || 'Failed to start queue');
       }
-      
+
     } catch (error) {
       console.error('Error starting queue:', error);
-      this.setStatus('error', 'Failed to start queue');
+      const msg = error.message?.includes('Could not establish connection')
+        ? 'Background not ready — try again'
+        : 'Failed to start queue';
+      this.setStatus('error', msg);
     } finally {
       this.busy.queueOperation = false;
     }
@@ -294,6 +312,54 @@ class LinkedInScraperPopup {
       }
     } catch (error) {
       console.error('Error stopping queue:', error);
+    }
+  }
+
+  async addToQueue() {
+    console.log('addToQueue called');
+    const urlText = this.elements.urlQueue.value.trim();
+    if (!urlText) {
+      this.setStatus('error', 'Please enter URLs to add');
+      return;
+    }
+
+    const newUrls = this.parseUrls(urlText);
+    console.log('Parsed URLs:', newUrls.length, newUrls);
+    if (newUrls.length === 0) {
+      this.setStatus('error', 'No valid LinkedIn URLs found');
+      return;
+    }
+
+    const existingUrls = new Set(this.queue.items.map(item => item.url));
+    const uniqueUrls = newUrls.filter(item => !existingUrls.has(item.url));
+    console.log('Unique URLs after dedup:', uniqueUrls.length);
+
+    if (uniqueUrls.length === 0) {
+      this.setStatus('error', 'All URLs already in queue');
+      return;
+    }
+
+    try {
+      const response = await this.chromeAPI(() => chrome.runtime.sendMessage({
+        action: 'addToQueue',
+        newItems: uniqueUrls
+      }));
+      console.log('addToQueue response:', response);
+
+      if (response && response.success) {
+        this.elements.urlQueue.value = '';
+        this.setStatus('ready', `Added ${uniqueUrls.length} URL(s) to queue`);
+        await this.loadQueueStatus();
+        this.updateAllUI();
+      } else {
+        throw new Error(response?.error || 'Failed to add to queue');
+      }
+    } catch (error) {
+      console.error('Error adding to queue:', error);
+      const msg = error.message?.includes('Could not establish connection')
+        ? 'Background not ready — try again'
+        : 'Failed to add to queue';
+      this.setStatus('error', msg);
     }
   }
 
@@ -1005,6 +1071,7 @@ class LinkedInScraperPopup {
         source: 'Self',
         name: conn.name,
         url: conn.url,
+        headline: conn.headline || '',
         mutualConnections: '',
         timestamp: new Date().toISOString()
       }));
@@ -1054,6 +1121,7 @@ class LinkedInScraperPopup {
         source: response.sourceConnection || 'Unknown',
         name: profile.name,
         url: profile.url,
+        headline: profile.headline || '',
         mutualConnections: profile.mutualConnections || '',
         timestamp: new Date().toISOString()
       }));
@@ -1265,7 +1333,7 @@ class LinkedInScraperPopup {
         return a.name.localeCompare(b.name);
       });
       
-      const headers = ['Type', 'Source', 'Name', 'URL', 'Mutual_Connections', 'Timestamp'];
+      const headers = ['Type', 'Source', 'Name', 'URL', 'Headline', 'Mutual_Connections', 'Timestamp'];
       const csvContent = [
         headers.join(','),
         ...allProfiles.map(row => [
@@ -1273,6 +1341,7 @@ class LinkedInScraperPopup {
           `"${row.source || ''}"`,
           `"${row.name || ''}"`,
           `"${row.url || ''}"`,
+          `"${(row.headline || '').replace(/"/g, '""')}"`,
           `"${row.mutualConnections || ''}"`,
           `"${row.timestamp || ''}"`
         ].join(','))
@@ -1280,17 +1349,17 @@ class LinkedInScraperPopup {
       
       const blob = new Blob([csvContent], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
-      
-      await this.chromeAPI(() => chrome.downloads.download({
-        url: url,
-        filename: this.fixedFileName,
-        saveAs: false,
-        conflictAction: 'overwrite'
-      }));
-      
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = this.fixedFileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
       this.setStatus('ready', `Exported ${allProfiles.length} profiles`);
       console.log(`CSV Export: ${allProfiles.length} profiles`);
-      
+
       setTimeout(() => URL.revokeObjectURL(url), 100);
       
     } catch (error) {
@@ -1426,13 +1495,20 @@ class LinkedInScraperPopup {
     }
   }
 
-  async chromeAPI(apiCall) {
-    try {
-      if (!chrome?.runtime?.id) throw new Error('Extension context not available');
-      return await apiCall();
-    } catch (error) {
-      console.error('Chrome API call failed:', error);
-      throw error;
+  async chromeAPI(apiCall, retries = 3) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        if (!chrome?.runtime?.id) throw new Error('Extension context not available');
+        return await apiCall();
+      } catch (error) {
+        const isConnectionError = error.message?.includes('Could not establish connection');
+        if (isConnectionError && attempt < retries) {
+          await this.delay(500);
+          continue;
+        }
+        console.error('Chrome API call failed:', error);
+        throw error;
+      }
     }
   }
 

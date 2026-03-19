@@ -141,6 +141,7 @@ class LinkedInScraperHand {
             source: this.isConnectionsPage() ? 'Self' : (result.sourceConnection || 'Unknown'),
             name: profile.name,
             url: profile.url,
+            headline: profile.headline || '',
             mutualConnections: profile.mutualConnections || '',
             timestamp: new Date().toISOString()
           }));
@@ -175,124 +176,117 @@ class LinkedInScraperHand {
 
   async extractMyConnections() {
     console.log('Extracting my connections...');
-    
+
     try {
       if (!this.isPageReady()) {
         await this.delay(1000);
       } else {
-        await this.delay(200); 
+        await this.delay(200);
       }
-      
+
       const connectionDetails = [];
-      const seenUrls = new Set(); 
-      
-      // Method 1: Live connection cards (most reliable)
-      const liveSelectors = '.mn-connection-card__details, .mn-connection-card, [data-view-name="connection-card"], .artdeco-entity-lockup';
-      const liveCards = document.querySelectorAll(liveSelectors);
-      console.log(`Found ${liveCards.length} live connection cards`);
-      
-      if (liveCards.length > 0) {
-        const linkSelectors = 'a.mn-connection-card__link[href*="/in/"], a[href*="/in/"]';
-        const nameSelectors = [
-          '.mn-connection-card__name',
-          '.artdeco-entity-lockup__title a',
-          '.t-16.t-black.t-bold',
-          'span[aria-hidden="true"]:not(.visually-hidden)',
-          'span.t-bold'
-        ];
-        
-        for (let card of liveCards) {
+      const seenUrls = new Set();
+
+      // Method 1 (2026 structure): Use figure[aria-label] to find connection cards
+      // LinkedIn now uses hashed class names, so we rely on aria-label and structural selectors
+      const figures = document.querySelectorAll('figure[aria-label*="profile picture"]');
+      console.log(`Found ${figures.length} profile picture figures (new structure)`);
+
+      if (figures.length > 0) {
+        for (let figure of figures) {
           try {
-            const linkElement = card.querySelector(linkSelectors);
-            if (!linkElement) continue;
-            
-            const profileUrl = linkElement.getAttribute('href').split('?')[0];
-            if (seenUrls.has(profileUrl)) continue;
-            seenUrls.add(profileUrl);
-            
-            let name = '';
-            for (let selector of nameSelectors) {
-              const nameElement = card.querySelector(selector);
-              if (nameElement && nameElement.textContent.trim()) {
-                name = nameElement.textContent.trim();
+            // Extract name from aria-label: "Betsy Yang's profile picture" -> "Betsy Yang"
+            const ariaLabel = figure.getAttribute('aria-label') || '';
+            let name = ariaLabel.replace(/'s profile picture$/i, '').trim();
+
+            // Walk up to find the card container (the div with componentkey="auto-component-...")
+            let card = figure.closest('div[componentkey^="auto-component-"]');
+            if (!card) {
+              // Fallback: walk up a few levels to find a container with a profile link
+              card = figure.closest('div');
+              while (card && !card.querySelector('a[href*="/in/"]')) {
+                card = card.parentElement;
+                if (!card || card === document.body) { card = null; break; }
+              }
+            }
+            if (!card) continue;
+
+            // Find the profile URL from any link in the card
+            const profileLinks = card.querySelectorAll('a[href*="/in/"]');
+            let profileUrl = null;
+            for (let link of profileLinks) {
+              const href = link.getAttribute('href');
+              if (href && href.includes('/in/')) {
+                try {
+                  profileUrl = new URL(href, 'https://www.linkedin.com').pathname;
+                } catch {
+                  profileUrl = href.split('?')[0].split('#')[0];
+                }
                 break;
               }
             }
-            
-            if (name && profileUrl) {
-              connectionDetails.push({ name, url: profileUrl });
-            }
-          } catch (error) {
-            continue;
-          }
-        }
-      }
-      
-      // Method 2: Saved HTML connection cards (fallback)
-      if (connectionDetails.length === 0) {
-        const savedCards = document.querySelectorAll('div[data-view-name="connections-list"] > div[componentkey]');
-        console.log(`Found ${savedCards.length} saved HTML connection cards`);
-        
-        for (let card of savedCards) {
-          try {
-            const linkElement = card.querySelector('a[data-view-name="connections-profile"]');
-            if (!linkElement) continue;
-            
-            const profileUrl = linkElement.getAttribute('href').split('?')[0];
+            if (!profileUrl) continue;
             if (seenUrls.has(profileUrl)) continue;
             seenUrls.add(profileUrl);
-            
-            let name = '';
-            const nameSelectors = ['p', 'span[aria-hidden="true"]', 'p > a[href*="/in/"]', 'div[data-view-name="connections-name"]'];
-            
-            for (let selector of nameSelectors) {
-              const nameElement = card.querySelector(selector);
-              if (nameElement && nameElement.textContent.trim()) {
-                name = nameElement.textContent.trim();
-                break;
+
+            // If name wasn't found from aria-label, try text content of bold <p> elements
+            if (!name) {
+              const boldParagraphs = card.querySelectorAll('p');
+              for (let p of boldParagraphs) {
+                const text = p.textContent.trim();
+                // The name paragraph is typically short and doesn't contain "Connected on" or job titles
+                if (text && text.length > 1 && text.length < 60 &&
+                    !text.includes('Connected on') && !text.includes('|') &&
+                    !text.includes('&') && !text.includes('@')) {
+                  name = text;
+                  break;
+                }
               }
             }
-            
+
+            // Last resort: extract from URL
             if (!name) {
               const urlMatch = profileUrl.match(/\/in\/([^\/]+)/);
               if (urlMatch) {
-                name = urlMatch[1].replace(/-/g, ' ').replace(/\d+/g, '').trim();
+                name = urlMatch[1].replace(/-/g, ' ').replace(/\d+/g, '').trim()
+                  .split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
               }
             }
-            
+
             if (name && profileUrl) {
-              connectionDetails.push({ name, url: profileUrl });
+              const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+              const headline = this.findHeadline(card);
+              connectionDetails.push({ name, url: fullUrl, headline });
             }
           } catch (error) {
             continue;
           }
         }
       }
-      
-      // Method 3: Alternative search/result cards (last resort)
+
+      // Method 2: Legacy selectors (pre-2026 LinkedIn structure)
       if (connectionDetails.length === 0) {
-        const alternativeCards = document.querySelectorAll('.search-result, .entity-result, [data-entity-urn], .reusable-search__entity-result');
-        console.log(`Found ${alternativeCards.length} alternative connection cards`);
-        
-        for (let card of alternativeCards) {
+        const liveSelectors = '.mn-connection-card__details, .mn-connection-card, [data-view-name="connection-card"], .artdeco-entity-lockup';
+        const liveCards = document.querySelectorAll(liveSelectors);
+        console.log(`Found ${liveCards.length} legacy connection cards`);
+
+        for (let card of liveCards) {
           try {
             const linkElement = card.querySelector('a[href*="/in/"]');
             if (!linkElement) continue;
-            
+
             const profileUrl = linkElement.getAttribute('href').split('?')[0];
             if (seenUrls.has(profileUrl)) continue;
             seenUrls.add(profileUrl);
-            
+
             let name = '';
             const nameSelectors = [
-              '.entity-result__title-text span[aria-hidden="true"]',
-              '.search-result__result-link',
-              'span[dir="ltr"] span[aria-hidden="true"]',
-              'h3 span',
-              'span.t-bold',
-              'span[aria-hidden="true"]:not(.visually-hidden)'
+              '.mn-connection-card__name',
+              '.artdeco-entity-lockup__title a',
+              '.t-16.t-black.t-bold',
+              'span[aria-hidden="true"]:not(.visually-hidden)',
+              'span.t-bold'
             ];
-            
             for (let selector of nameSelectors) {
               const nameElement = card.querySelector(selector);
               if (nameElement && nameElement.textContent.trim()) {
@@ -300,30 +294,83 @@ class LinkedInScraperHand {
                 break;
               }
             }
-            
-            if (!name) {
-              const urlMatch = profileUrl.match(/\/in\/([^\/]+)/);
-              if (urlMatch) {
-                name = urlMatch[1].replace(/-/g, ' ').replace(/\d+/g, '').trim();
-              }
-            }
-            
+
             if (name && profileUrl) {
-              connectionDetails.push({ name, url: profileUrl });
+              const headline = this.findHeadline(card);
+              connectionDetails.push({ name, url: profileUrl, headline });
             }
           } catch (error) {
             continue;
           }
         }
       }
-      
+
+      // Method 3: Generic fallback - find all profile links and deduplicate
+      if (connectionDetails.length === 0) {
+        const allProfileLinks = document.querySelectorAll('a[href*="/in/"]');
+        console.log(`Fallback: found ${allProfileLinks.length} profile links`);
+
+        for (let link of allProfileLinks) {
+          try {
+            const href = link.getAttribute('href');
+            if (!href || !href.includes('/in/')) continue;
+
+            let profileUrl;
+            try {
+              profileUrl = new URL(href, 'https://www.linkedin.com').pathname;
+            } catch {
+              profileUrl = href.split('?')[0];
+            }
+            if (seenUrls.has(profileUrl)) continue;
+            seenUrls.add(profileUrl);
+
+            // Try to get name from nearby figure, img alt, or text content
+            let name = '';
+            const container = link.closest('div[componentkey]') || link.parentElement?.parentElement;
+            if (container) {
+              const fig = container.querySelector('figure[aria-label]');
+              if (fig) {
+                name = (fig.getAttribute('aria-label') || '').replace(/'s profile picture$/i, '').trim();
+              }
+              if (!name) {
+                const img = container.querySelector('img[alt]');
+                if (img && img.alt && !img.alt.toLowerCase().includes('linkedin')) {
+                  name = img.alt.replace(/'s profile picture$/i, '').trim();
+                }
+              }
+            }
+            if (!name) {
+              const linkText = link.textContent.trim();
+              if (linkText && linkText.length > 1 && linkText.length < 60) {
+                name = linkText;
+              }
+            }
+            if (!name) {
+              const urlMatch = profileUrl.match(/\/in\/([^\/]+)/);
+              if (urlMatch) {
+                name = urlMatch[1].replace(/-/g, ' ').replace(/\d+/g, '').trim()
+                  .split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+              }
+            }
+
+            if (name && profileUrl) {
+              const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+              const headline = container ? this.findHeadline(container) : '';
+              connectionDetails.push({ name, url: fullUrl, headline });
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+
       console.log(`Extracted ${connectionDetails.length} connections`);
-      
+
       return {
         success: true,
         data: connectionDetails
       };
-      
+
     } catch (error) {
       console.error('Error extracting my connections:', error);
       return {
@@ -379,66 +426,146 @@ class LinkedInScraperHand {
 
   extractFromSearchResults() {
     const profiles = [];
-    
-    // UPDATED: Use new stable data-view-name selector
-    const resultContainers = document.querySelectorAll('div[data-view-name="people-search-result"]');
-    
-    console.log(`Found ${resultContainers.length} search result containers`);
-    
     const processedUrls = new Set();
-    
-    // UPDATED: New extraction logic based on current LinkedIn structure
-    for (let card of resultContainers) {
-      try {
-        const linkElement = card.querySelector('a[data-view-name="search-result-lockup-title"]');
-        if (!linkElement) continue;
 
-        // Extract URL and clean it
-        let profileUrl;
+    // Strategy 1 (2026): Search results use div[role="listitem"] inside div[role="list"]
+    // Each listitem is wrapped in a parent <a href="/in/..."> tag
+    const listItems = document.querySelectorAll('div[role="listitem"]');
+    console.log(`Found ${listItems.length} listitem cards (2026 structure)`);
+
+    if (listItems.length > 0) {
+      for (let card of listItems) {
         try {
-          profileUrl = new URL(linkElement.href).pathname;
-        } catch (e) {
-          // Fallback for relative URLs
-          profileUrl = linkElement.getAttribute('href').split('?')[0].split('#')[0];
+          // The card's parent <a> tag has the profile URL
+          const parentLink = card.closest('a[href*="/in/"]');
+          if (!parentLink) continue;
+
+          let profileUrl;
+          try {
+            profileUrl = new URL(parentLink.href).pathname;
+          } catch {
+            profileUrl = parentLink.getAttribute('href').split('?')[0];
+          }
+          if (!profileUrl || !profileUrl.includes('/in/')) continue;
+          if (processedUrls.has(profileUrl)) continue;
+          processedUrls.add(profileUrl);
+
+          // Get name from figure[aria-label] (on search pages it's just the name, not "X's profile picture")
+          let name = '';
+          const fig = card.querySelector('figure[aria-label]');
+          if (fig) {
+            const label = fig.getAttribute('aria-label') || '';
+            name = label.replace(/'s profile picture$/i, '').trim();
+          }
+          // Fallback: img alt
+          if (!name) {
+            const img = card.querySelector('img[alt]');
+            if (img && img.alt && img.alt.length > 1 && !img.alt.toLowerCase().includes('linkedin')) {
+              name = img.alt.replace(/'s profile picture$/i, '').trim();
+            }
+          }
+          // Fallback: first <a> inside the card with text that looks like a name
+          if (!name) {
+            const nameLinks = card.querySelectorAll('a[href*="/in/"]');
+            for (let nl of nameLinks) {
+              const text = nl.textContent.trim();
+              if (text && text.length > 1 && text.length < 60 && !text.includes('Connect') && !text.includes('mutual')) {
+                name = text;
+                break;
+              }
+            }
+          }
+          if (!name) continue;
+
+          // Get mutual connections from the card or parent link context
+          // Mutual info is in <strong> tags: "Name1", "Name2" and "N other mutual connections"
+          const mutualConnections = this.findMutualConnectionsInfoNew(parentLink);
+          const headline = this.findHeadline(card);
+
+          const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+          profiles.push({ name, url: fullUrl, mutualConnections, headline });
+
+          console.log(`${name} -> ${fullUrl} | ${headline || 'No headline'} (${mutualConnections || 'No mutual connections'})`);
+        } catch (error) {
+          continue;
         }
-        
-        if (processedUrls.has(profileUrl)) continue;
-        processedUrls.add(profileUrl);
-
-        let name = '';
-        // Method 1: Get name from the image alt text (most reliable)
-        const img = card.querySelector('img[alt]');
-        if (img && img.alt) {
-          name = img.alt.trim();
-        }
-
-        // Method 2: Fallback to the link's text content
-        if (!name && linkElement.textContent) {
-          name = linkElement.textContent.trim().replace(/•.*/, '').trim();
-        }
-        
-        if (!name) continue; // Skip if no name found
-
-        // Get mutual connections info using new helper
-        const mutualConnections = this.findMutualConnectionsInfoNew(card);
-
-        // Ensure full URL
-        const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
-
-        profiles.push({
-          name: name,
-          url: fullUrl,
-          mutualConnections: mutualConnections
-        });
-        
-        console.log(`${name} -> ${fullUrl} (${mutualConnections || 'No mutual connections'})`);
-
-      } catch (error) {
-        console.warn('Error processing a result card:', error);
-        continue;
       }
     }
-    
+
+    // Strategy 2: data-view-name selectors (older structure)
+    if (profiles.length === 0) {
+      const resultContainers = document.querySelectorAll('div[data-view-name="people-search-result"]');
+      console.log(`Found ${resultContainers.length} search result containers (data-view-name)`);
+
+      for (let card of resultContainers) {
+        try {
+          const linkElement = card.querySelector('a[data-view-name="search-result-lockup-title"]') ||
+                              card.querySelector('a[href*="/in/"]');
+          if (!linkElement) continue;
+
+          let profileUrl;
+          try { profileUrl = new URL(linkElement.href).pathname; }
+          catch { profileUrl = linkElement.getAttribute('href').split('?')[0]; }
+          if (processedUrls.has(profileUrl)) continue;
+          processedUrls.add(profileUrl);
+
+          let name = '';
+          const img = card.querySelector('img[alt]');
+          if (img && img.alt && !img.alt.toLowerCase().includes('linkedin')) {
+            name = img.alt.replace(/'s profile picture$/i, '').trim();
+          }
+          if (!name) {
+            const fig = card.querySelector('figure[aria-label]');
+            if (fig) name = (fig.getAttribute('aria-label') || '').replace(/'s profile picture$/i, '').trim();
+          }
+          if (!name && linkElement.textContent) {
+            name = linkElement.textContent.trim().replace(/•.*/, '').trim();
+          }
+          if (!name) continue;
+
+          const mutualConnections = this.findMutualConnectionsInfoNew(card);
+          const headline = this.findHeadline(card);
+          const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+          profiles.push({ name, url: fullUrl, mutualConnections, headline });
+        } catch (error) { continue; }
+      }
+    }
+
+    // Strategy 3: Legacy reusable-search selectors
+    if (profiles.length === 0) {
+      const legacyCards = document.querySelectorAll('li.reusable-search__entity-result, .entity-result, [data-entity-urn]');
+      console.log(`Found ${legacyCards.length} legacy search result cards`);
+
+      for (let card of legacyCards) {
+        try {
+          const linkElement = card.querySelector('a[href*="/in/"]');
+          if (!linkElement) continue;
+
+          let profileUrl;
+          try { profileUrl = new URL(linkElement.href).pathname; }
+          catch { profileUrl = linkElement.getAttribute('href').split('?')[0]; }
+          if (processedUrls.has(profileUrl)) continue;
+          processedUrls.add(profileUrl);
+
+          let name = '';
+          for (let sel of ['span[dir="ltr"] span[aria-hidden="true"]', '.entity-result__title-text span[aria-hidden="true"]', 'span.t-bold']) {
+            const el = card.querySelector(sel);
+            if (el && el.textContent.trim()) { name = el.textContent.trim(); break; }
+          }
+          if (!name) {
+            const img = card.querySelector('img[alt]');
+            if (img && img.alt) name = img.alt.replace(/'s profile picture$/i, '').trim();
+          }
+          if (!name) continue;
+
+          const mutualConnections = this.findMutualConnectionsForContainer(card) || '';
+          const headline = this.findHeadline(card);
+          const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+          profiles.push({ name, url: fullUrl, mutualConnections, headline });
+        } catch (error) { continue; }
+      }
+    }
+
     return profiles;
   }
 
@@ -575,6 +702,47 @@ class LinkedInScraperHand {
     return null;
   }
 
+  // Extract the headline/description text from a card (e.g., "Founder at Bleecker Street")
+  findHeadline(card) {
+    if (!card) return '';
+
+    // The headline is in a <p> inside a <div>, after the name <p>.
+    // Strategy: Find all <p> elements and pick the one that looks like a headline.
+    // Skip: name (bold), "Connected on...", degree indicators ("• 2nd"), "mutual", locations with commas
+    const allParagraphs = card.querySelectorAll('p');
+    const candidates = [];
+
+    for (let p of allParagraphs) {
+      const text = p.textContent.trim();
+      if (!text || text.length < 3 || text.length > 200) continue;
+
+      // Skip the name paragraph (typically has bold styling or contains the person link + degree)
+      if (p.querySelector('a[href*="/in/"]')) continue;
+
+      // Skip "Connected on..." text
+      if (text.toLowerCase().startsWith('connected on')) continue;
+
+      // Skip degree indicators
+      if (/^[•·]\s*\d+(st|nd|rd|th)\+?$/.test(text.trim())) continue;
+
+      // Skip mutual connections text
+      if (text.toLowerCase().includes('mutual connection')) continue;
+      if (text.toLowerCase().includes('mutual')) continue;
+
+      // Skip "Connect" / "Message" button text
+      if (['connect', 'message', 'follow'].includes(text.toLowerCase())) continue;
+
+      // Skip followers text
+      if (text.toLowerCase().includes('follower')) continue;
+
+      // This looks like a headline or location - take the first one (headline comes before location)
+      candidates.push(text);
+    }
+
+    // The first candidate is typically the headline, second is location
+    return candidates.length > 0 ? candidates[0] : '';
+  }
+
   findMutualConnectionsForContainer(resultContainer) {
     const mutualContainer = resultContainer.querySelector('.reusable-search-simple-insight__text-container');
     if (mutualContainer && mutualContainer.textContent.trim()) {
@@ -645,119 +813,242 @@ class LinkedInScraperHand {
     }
   }
 
-  // NEW: Helper function for updated LinkedIn structure
+  // Helper function for updated LinkedIn structure - finds mutual connections text
   findMutualConnectionsInfoNew(card) {
-    // The new container for mutual insights has a very generic class. We target it structurally.
+    // Strategy 1 (2026): Look for <strong> tags containing "mutual connections"
+    // The new structure uses: <strong>Name1</strong>, <strong>Name2</strong> and <strong>N other mutual connections</strong>
+    const strongElements = card.querySelectorAll('strong');
+    for (let strong of strongElements) {
+      const text = strong.textContent.trim().toLowerCase();
+      if (text.includes('mutual connection')) {
+        // Found the "N other mutual connections" strong tag - get the full paragraph
+        const parentP = strong.closest('p');
+        if (parentP) {
+          return parentP.textContent.trim().replace(/\s\s+/g, ' ');
+        }
+        return strong.textContent.trim();
+      }
+    }
+
+    // Strategy 2: Look for any <p> or <a> text containing "mutual"
+    const allParagraphs = card.querySelectorAll('p');
+    for (let p of allParagraphs) {
+      const text = p.textContent.trim();
+      if (text.toLowerCase().includes('mutual') && text.length < 200) {
+        return text.replace(/\s\s+/g, ' ');
+      }
+    }
+
+    // Strategy 3: Look for any span containing "mutual"
+    const allSpans = card.querySelectorAll('span');
+    for (let span of allSpans) {
+      const text = span.textContent.trim();
+      if (text.toLowerCase().includes('mutual') && text.length < 200) {
+        return text.replace(/\s\s+/g, ' ');
+      }
+    }
+
+    // Strategy 4: Hashed class selector (fragile, may break)
     const mutualInsightContainer = card.querySelector('div.ab54df51');
     if (mutualInsightContainer) {
       const textElement = mutualInsightContainer.querySelector('p');
       if (textElement) {
-        // The full descriptive text is more useful and robust to extract than just a number.
         return textElement.textContent.trim().replace(/\s\s+/g, ' ');
       }
     }
-    return ''; // Return empty string if not found
+
+    // Strategy 5: Legacy selector
+    const legacyContainer = card.querySelector('.reusable-search-simple-insight__text-container');
+    if (legacyContainer) {
+      return legacyContainer.textContent.trim().replace(/\s\s+/g, ' ');
+    }
+
+    return '';
   }
 
   extractFromConnectionsList() {
     const profiles = [];
-    
-    const profileListItems = document.querySelectorAll('div[data-view-name="connections-list"] > div');
-    
-    for (let item of profileListItems) {
+    const seenUrls = new Set();
+
+    // New 2026 structure: cards identified by componentkey and figure aria-labels
+    const figures = document.querySelectorAll('figure[aria-label*="profile picture"]');
+    console.log(`extractFromConnectionsList: found ${figures.length} figures`);
+
+    for (let figure of figures) {
       try {
-        const linkElement = item.querySelector('a[data-view-name="connections-profile"]');
+        const name = (figure.getAttribute('aria-label') || '').replace(/'s profile picture$/i, '').trim();
+        if (!name) continue;
+
+        const card = figure.closest('div[componentkey^="auto-component-"]') || figure.closest('div');
+        if (!card) continue;
+
+        const linkElement = card.querySelector('a[href*="/in/"]');
         if (!linkElement) continue;
-        
-        const profileUrl = linkElement.getAttribute('href').split('?')[0];
-        
-        let name = '';
-        const nameSelectors = ['p', 'span[aria-hidden="true"]', 'p > a[href*="/in/"]'];
-        
-        for (let selector of nameSelectors) {
-          const nameElement = item.querySelector(selector);
-          if (nameElement && nameElement.textContent.trim()) {
-            name = nameElement.textContent.trim();
-            break;
-          }
+
+        let profileUrl;
+        try {
+          profileUrl = new URL(linkElement.href, 'https://www.linkedin.com').pathname;
+        } catch {
+          profileUrl = linkElement.getAttribute('href').split('?')[0];
         }
-        
-        if (!name) {
-          const urlMatch = profileUrl.match(/\/in\/([^\/]+)/);
-          if (urlMatch) {
-            name = urlMatch[1].replace(/-/g, ' ').replace(/\d+/g, '').trim();
-          }
-        }
-        
-        if (name && profileUrl && !profiles.some(p => p.url === profileUrl)) {
-          profiles.push({ name, url: profileUrl });
-        }
+
+        if (seenUrls.has(profileUrl)) continue;
+        seenUrls.add(profileUrl);
+
+        const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+        const headline = this.findHeadline(card);
+        profiles.push({ name, url: fullUrl, headline });
       } catch (error) {
         continue;
       }
     }
-    
+
+    // Legacy fallback
+    if (profiles.length === 0) {
+      const profileListItems = document.querySelectorAll('div[data-view-name="connections-list"] > div');
+      for (let item of profileListItems) {
+        try {
+          const linkElement = item.querySelector('a[data-view-name="connections-profile"]');
+          if (!linkElement) continue;
+          const profileUrl = linkElement.getAttribute('href').split('?')[0];
+          if (seenUrls.has(profileUrl)) continue;
+          seenUrls.add(profileUrl);
+
+          let name = '';
+          for (let selector of ['p', 'span[aria-hidden="true"]']) {
+            const el = item.querySelector(selector);
+            if (el && el.textContent.trim()) { name = el.textContent.trim(); break; }
+          }
+          if (!name) {
+            const urlMatch = profileUrl.match(/\/in\/([^\/]+)/);
+            if (urlMatch) name = urlMatch[1].replace(/-/g, ' ').replace(/\d+/g, '').trim();
+          }
+          if (name && profileUrl) profiles.push({ name, url: profileUrl });
+        } catch (error) { continue; }
+      }
+    }
+
     return profiles;
   }
 
   async extractConnectionsAlternative() {
     try {
       const profileDetails = [];
-      
-      const alternativeSelectors = [
-        'div[data-view-name="connections-list"] > div',
-        'li.reusable-search__entity-result',
-        '.search-result__info .search-result__result-link',
-        '.entity-result__title-text a',
-        '.search-result__title a',
-        '.reusable-search__result-container a[href*="/in/"]'
-      ];
-      
-      for (let selector of alternativeSelectors) {
-        const elements = document.querySelectorAll(selector);
-        console.log(`Trying alternative selector "${selector}": found ${elements.length} elements`);
-        
-        if (elements.length > 0) {
-          for (let element of elements) {
-            try {
-              let profileUrl, name;
-              
-              if (selector === 'div[data-view-name="connections-list"] > div') {
-                const linkElement = element.querySelector('a[data-view-name="connections-profile"]');
-                const nameElement = element.querySelector('p > a[href*="/in/"]');
-                if (linkElement && nameElement) {
-                  profileUrl = linkElement.getAttribute('href').split('?')[0];
-                  name = nameElement.textContent.trim();
-                }
-              } else if (selector === 'li.reusable-search__entity-result') {
-                const linkElement = element.querySelector("a.app-aware-link");
-                if (linkElement) {
-                  profileUrl = linkElement.getAttribute('href').split('?')[0];
-                  const nameElement = linkElement.querySelector('span[dir="ltr"] span[aria-hidden="true"]');
-                  if (nameElement) {
-                    name = nameElement.textContent.trim();
-                  }
-                }
-              } else {
-                profileUrl = element.getAttribute('href')?.split('?')[0];
-                name = element.textContent.trim() || element.querySelector('span')?.textContent?.trim();
+      const seenUrls = new Set();
+
+      // Strategy 1 (2026): Scan all profile links and use figure/img for names
+      const allProfileLinks = document.querySelectorAll('a[href*="/in/"]');
+      console.log(`Alternative extraction: found ${allProfileLinks.length} profile links`);
+
+      for (let link of allProfileLinks) {
+        try {
+          const href = link.getAttribute('href');
+          if (!href || !href.includes('/in/')) continue;
+
+          let profileUrl;
+          try {
+            profileUrl = new URL(href, 'https://www.linkedin.com').pathname;
+          } catch {
+            profileUrl = href.split('?')[0];
+          }
+          if (seenUrls.has(profileUrl)) continue;
+          seenUrls.add(profileUrl);
+
+          let name = '';
+
+          // Walk up to find a card container
+          const card = link.closest('div[componentkey^="auto-component-"]') ||
+                       link.closest('li') ||
+                       link.closest('div[componentkey]') ||
+                       link.parentElement?.parentElement?.parentElement;
+
+          if (card) {
+            // Try figure aria-label
+            const fig = card.querySelector('figure[aria-label]');
+            if (fig) {
+              name = (fig.getAttribute('aria-label') || '').replace(/'s profile picture$/i, '').trim();
+            }
+            // Try img alt
+            if (!name) {
+              const img = card.querySelector('img[alt]');
+              if (img && img.alt && !img.alt.toLowerCase().includes('linkedin')) {
+                name = img.alt.replace(/'s profile picture$/i, '').trim();
               }
-              
-              if (name && profileUrl && !profileDetails.some(p => p.url === profileUrl)) {
-                profileDetails.push({ name, url: profileUrl });
-              }
-            } catch (error) {
-              continue;
             }
           }
-          
-          if (profileDetails.length > 0) {
-            console.log(`Success with alternative selector "${selector}": extracted ${profileDetails.length} profiles`);
-            break;
+
+          // Try link text content
+          if (!name) {
+            const text = link.textContent.trim();
+            if (text && text.length > 1 && text.length < 60 && !text.toLowerCase().includes('message')) {
+              name = text.replace(/•.*/, '').trim();
+            }
           }
+
+          // URL fallback
+          if (!name) {
+            const urlMatch = profileUrl.match(/\/in\/([^\/]+)/);
+            if (urlMatch) {
+              name = urlMatch[1].replace(/-/g, ' ').replace(/\d+/g, '').trim()
+                .split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            }
+          }
+
+          if (name && profileUrl) {
+            const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
+
+            // Try to get mutual connections from card
+            let mutualConnections = '';
+            if (card) {
+              mutualConnections = this.findMutualConnectionsInfoNew(card);
+            }
+
+            profileDetails.push({ name, url: fullUrl, mutualConnections });
+          }
+        } catch (error) {
+          continue;
         }
       }
-      
+
+      if (profileDetails.length > 0) {
+        console.log(`Alternative extraction succeeded: ${profileDetails.length} profiles`);
+        return profileDetails;
+      }
+
+      // Strategy 2: Legacy selectors
+      const legacySelectors = [
+        'li.reusable-search__entity-result',
+        '.entity-result__title-text a',
+        '.reusable-search__result-container a[href*="/in/"]'
+      ];
+
+      for (let selector of legacySelectors) {
+        const elements = document.querySelectorAll(selector);
+        if (elements.length === 0) continue;
+        console.log(`Trying legacy selector "${selector}": found ${elements.length} elements`);
+
+        for (let element of elements) {
+          try {
+            let profileUrl, name;
+            if (selector === 'li.reusable-search__entity-result') {
+              const linkElement = element.querySelector('a.app-aware-link');
+              if (linkElement) {
+                profileUrl = linkElement.getAttribute('href').split('?')[0];
+                const nameElement = linkElement.querySelector('span[dir="ltr"] span[aria-hidden="true"]');
+                if (nameElement) name = nameElement.textContent.trim();
+              }
+            } else {
+              profileUrl = element.getAttribute('href')?.split('?')[0];
+              name = element.textContent.trim() || element.querySelector('span')?.textContent?.trim();
+            }
+            if (name && profileUrl && !profileDetails.some(p => p.url === profileUrl)) {
+              profileDetails.push({ name, url: profileUrl });
+            }
+          } catch (error) { continue; }
+        }
+        if (profileDetails.length > 0) break;
+      }
+
       return profileDetails;
     } catch (error) {
       console.error('Error in alternative extraction:', error);
@@ -1162,6 +1453,27 @@ class LinkedInScraperHand {
   }
 
   findSourceConnectionFromPage() {
+    // Strategy 1 (2026): Filter pills use aria-label="Filter by <Name>" with aria-checked="true"
+    // Skip generic filters like "2nd connections", "3rd+ connections", "Locations", "Current companies", etc.
+    const skipLabels = ['2nd connections', '3rd+ connections', 'locations', 'current companies', 'actively hiring'];
+    const filterDivs = document.querySelectorAll('div[aria-label^="Filter by"]');
+    for (let div of filterDivs) {
+      const parentRadio = div.closest('[aria-checked="true"], [aria-expanded]');
+      if (!parentRadio) continue;
+      // Only consider checked/active filters
+      if (parentRadio.getAttribute('aria-checked') !== 'true' &&
+          parentRadio.getAttribute('aria-expanded') !== 'true') continue;
+
+      const ariaLabel = div.getAttribute('aria-label') || '';
+      const filterValue = ariaLabel.replace(/^Filter by\s+/i, '').trim();
+      if (!filterValue) continue;
+      if (skipLabels.some(skip => filterValue.toLowerCase() === skip)) continue;
+
+      // This looks like a person's name filter
+      return filterValue;
+    }
+
+    // Strategy 2: Legacy filter pill button
     const filterPill = document.querySelector('button[id="searchFilter_connectionOf"]');
     if (filterPill && filterPill.textContent.trim()) {
       const name = filterPill.textContent.trim();
@@ -1169,18 +1481,20 @@ class LinkedInScraperHand {
         return name;
       }
     }
-    
+
+    // Strategy 3: Legacy filter label
     const filterLabel = document.querySelector('.search-reusables__value-label .t-14.t-black--light.t-normal[aria-hidden="true"]');
     if (filterLabel && filterLabel.textContent.trim()) {
       return filterLabel.textContent.trim();
     }
-    
+
+    // Strategy 4: URL parameter
     const urlParams = new URLSearchParams(window.location.search);
-    const connectionOfParam = urlParams.get('facetConnectionOf');
+    const connectionOfParam = urlParams.get('facetConnectionOf') || urlParams.get('connectionOf');
     if (connectionOfParam) {
       return decodeURIComponent(connectionOfParam);
     }
-    
+
     return null;
   }
 
@@ -1209,16 +1523,20 @@ class LinkedInScraperHand {
 
   isConnectionsPage() {
     return window.location.href.includes('/mynetwork/invite-connect/connections/') ||
-           (window.location.href.startsWith('file://') && 
+           (window.location.href.startsWith('file://') &&
             (document.title.toLowerCase().includes('connections') ||
-             document.querySelector('div[data-view-name="connections-list"]')));
+             document.querySelector('div[data-view-name="connections-list"]') ||
+             // New 2026 structure: connections page has figure elements with profile pictures
+             document.querySelectorAll('figure[aria-label*="profile picture"]').length > 0));
   }
 
   isSearchResultsPage() {
     return window.location.href.includes('/search/results/people/') ||
-           (window.location.href.startsWith('file://') && 
+           (window.location.href.startsWith('file://') &&
             (document.querySelector('.reusable-search__entity-result-list') ||
-             document.querySelector('li.reusable-search__entity-result')));
+             document.querySelector('li.reusable-search__entity-result') ||
+             // 2026 structure: search results use role="list" with role="listitem" children
+             document.querySelector('div[role="list"] div[role="listitem"]')));
   }
 
   hasSearchResults() {
