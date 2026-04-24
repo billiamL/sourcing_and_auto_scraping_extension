@@ -211,18 +211,29 @@ class LinkedInScraperHand {
             }
             if (!card) continue;
 
-            // Find the profile URL from any link in the card
-            const profileLinks = card.querySelectorAll('a[href*="/in/"]');
+            // Find the profile URL: prefer the <a> wrapping the figure (always this person),
+            // falling back to the first /in/ link in the card.
             let profileUrl = null;
-            for (let link of profileLinks) {
-              const href = link.getAttribute('href');
-              if (href && href.includes('/in/')) {
-                try {
-                  profileUrl = new URL(href, 'https://www.linkedin.com').pathname;
-                } catch {
-                  profileUrl = href.split('?')[0].split('#')[0];
+            const figureLink = figure.closest('a[href*="/in/"]');
+            if (figureLink) {
+              try {
+                profileUrl = new URL(figureLink.href, 'https://www.linkedin.com').pathname;
+              } catch {
+                profileUrl = figureLink.getAttribute('href').split('?')[0].split('#')[0];
+              }
+            }
+            if (!profileUrl) {
+              const profileLinks = card.querySelectorAll('a[href*="/in/"]');
+              for (let link of profileLinks) {
+                const href = link.getAttribute('href');
+                if (href && href.includes('/in/')) {
+                  try {
+                    profileUrl = new URL(href, 'https://www.linkedin.com').pathname;
+                  } catch {
+                    profileUrl = href.split('?')[0].split('#')[0];
+                  }
+                  break;
                 }
-                break;
               }
             }
             if (!profileUrl) continue;
@@ -255,7 +266,7 @@ class LinkedInScraperHand {
 
             if (name && profileUrl) {
               const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
-              const headline = this.findHeadline(card);
+              const headline = this.findHeadline(card, name);
               connectionDetails.push({ name, url: fullUrl, headline });
             }
           } catch (error) {
@@ -296,7 +307,7 @@ class LinkedInScraperHand {
             }
 
             if (name && profileUrl) {
-              const headline = this.findHeadline(card);
+              const headline = this.findHeadline(card, name);
               connectionDetails.push({ name, url: profileUrl, headline });
             }
           } catch (error) {
@@ -355,7 +366,7 @@ class LinkedInScraperHand {
 
             if (name && profileUrl) {
               const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
-              const headline = container ? this.findHeadline(container) : '';
+              const headline = container ? this.findHeadline(container, name) : '';
               connectionDetails.push({ name, url: fullUrl, headline });
             }
           } catch (error) {
@@ -436,27 +447,36 @@ class LinkedInScraperHand {
     if (listItems.length > 0) {
       for (let card of listItems) {
         try {
-          // The card's parent <a> tag has the profile URL
-          const parentLink = card.closest('a[href*="/in/"]');
-          if (!parentLink) continue;
-
-          let profileUrl;
-          try {
-            profileUrl = new URL(parentLink.href).pathname;
-          } catch {
-            profileUrl = parentLink.getAttribute('href').split('?')[0];
-          }
-          if (!profileUrl || !profileUrl.includes('/in/')) continue;
-          if (processedUrls.has(profileUrl)) continue;
-          processedUrls.add(profileUrl);
-
-          // Get name from figure[aria-label] (on search pages it's just the name, not "X's profile picture")
+          // Get name from figure[aria-label] first
           let name = '';
           const fig = card.querySelector('figure[aria-label]');
           if (fig) {
             const label = fig.getAttribute('aria-label') || '';
             name = label.replace(/'s profile picture$/i, '').trim();
           }
+
+          // Anchor URL to the <a> wrapping the figure (guaranteed to be this person's profile).
+          // Fall back to the card's ancestor <a> only if the figure has no direct link.
+          let profileUrl;
+          const figureLink = fig ? fig.closest('a[href*="/in/"]') : null;
+          if (figureLink) {
+            try {
+              profileUrl = new URL(figureLink.href).pathname;
+            } catch {
+              profileUrl = figureLink.getAttribute('href').split('?')[0];
+            }
+          } else {
+            const parentLink = card.closest('a[href*="/in/"]');
+            if (!parentLink) continue;
+            try {
+              profileUrl = new URL(parentLink.href).pathname;
+            } catch {
+              profileUrl = parentLink.getAttribute('href').split('?')[0];
+            }
+          }
+          if (!profileUrl || !profileUrl.includes('/in/')) continue;
+          if (processedUrls.has(profileUrl)) continue;
+          processedUrls.add(profileUrl);
           // Fallback: img alt
           if (!name) {
             const img = card.querySelector('img[alt]');
@@ -480,7 +500,7 @@ class LinkedInScraperHand {
           // Get mutual connections from the card or parent link context
           // Mutual info is in <strong> tags: "Name1", "Name2" and "N other mutual connections"
           const mutualConnections = this.findMutualConnectionsInfoNew(parentLink);
-          const headline = this.findHeadline(card);
+          const headline = this.findHeadline(card, name);
 
           const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
           profiles.push({ name, url: fullUrl, mutualConnections, headline });
@@ -524,7 +544,7 @@ class LinkedInScraperHand {
           if (!name) continue;
 
           const mutualConnections = this.findMutualConnectionsInfoNew(card);
-          const headline = this.findHeadline(card);
+          const headline = this.findHeadline(card, name);
           const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
           profiles.push({ name, url: fullUrl, mutualConnections, headline });
         } catch (error) { continue; }
@@ -559,7 +579,7 @@ class LinkedInScraperHand {
           if (!name) continue;
 
           const mutualConnections = this.findMutualConnectionsForContainer(card) || '';
-          const headline = this.findHeadline(card);
+          const headline = this.findHeadline(card, name);
           const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
           profiles.push({ name, url: fullUrl, mutualConnections, headline });
         } catch (error) { continue; }
@@ -703,44 +723,48 @@ class LinkedInScraperHand {
   }
 
   // Extract the headline/description text from a card (e.g., "Founder at Bleecker Street")
-  findHeadline(card) {
+  findHeadline(card, personName) {
     if (!card) return '';
 
-    // The headline is in a <p> inside a <div>, after the name <p>.
-    // Strategy: Find all <p> elements and pick the one that looks like a headline.
-    // Skip: name (bold), "Connected on...", degree indicators ("• 2nd"), "mutual", locations with commas
-    const allParagraphs = card.querySelectorAll('p');
-    const candidates = [];
+    const normalizedName = (personName || '').toLowerCase().trim();
 
-    for (let p of allParagraphs) {
-      const text = p.textContent.trim();
-      if (!text || text.length < 3 || text.length > 200) continue;
-
-      // Skip the name paragraph (typically has bold styling or contains the person link + degree)
-      if (p.querySelector('a[href*="/in/"]')) continue;
-
+    const isHeadlineCandidate = (el, text) => {
+      if (!text || text.length < 3 || text.length > 220) return false;
+      const lower = text.toLowerCase();
+      // Skip the person's own name
+      if (normalizedName && lower === normalizedName) return false;
+      // Skip elements inside <figure> (avatar area)
+      if (el.closest('figure')) return false;
+      // Skip aria-hidden spans (often used for visually-hidden name duplicates)
+      if (el.getAttribute('aria-hidden') === 'true') return false;
       // Skip "Connected on..." text
-      if (text.toLowerCase().startsWith('connected on')) continue;
-
-      // Skip degree indicators
-      if (/^[•·]\s*\d+(st|nd|rd|th)\+?$/.test(text.trim())) continue;
-
+      if (lower.startsWith('connected on')) return false;
+      // Skip degree indicators like "• 2nd"
+      if (/^[•·]\s*\d+(st|nd|rd|th)\+?$/.test(text)) return false;
       // Skip mutual connections text
-      if (text.toLowerCase().includes('mutual connection')) continue;
-      if (text.toLowerCase().includes('mutual')) continue;
+      if (lower.includes('mutual connection') || lower.includes('mutual')) return false;
+      // Skip button labels
+      if (['connect', 'message', 'follow', 'pending'].includes(lower)) return false;
+      // Skip followers count
+      if (lower.includes('follower')) return false;
+      return true;
+    };
 
-      // Skip "Connect" / "Message" button text
-      if (['connect', 'message', 'follow'].includes(text.toLowerCase())) continue;
-
-      // Skip followers text
-      if (text.toLowerCase().includes('follower')) continue;
-
-      // This looks like a headline or location - take the first one (headline comes before location)
-      candidates.push(text);
+    // Try <p> elements first (older LinkedIn structure used <p> for headlines)
+    for (let p of card.querySelectorAll('p')) {
+      if (p.querySelector('a[href*="/in/"]')) continue; // skip name paragraphs
+      const text = p.textContent.trim();
+      if (isHeadlineCandidate(p, text)) return text;
     }
 
-    // The first candidate is typically the headline, second is location
-    return candidates.length > 0 ? candidates[0] : '';
+    // Fallback: try leaf <span> elements (LinkedIn 2026 structure uses spans)
+    for (let span of card.querySelectorAll('span')) {
+      if (span.querySelector('span')) continue; // only leaf spans to avoid duplicated text
+      const text = span.textContent.trim();
+      if (isHeadlineCandidate(span, text)) return text;
+    }
+
+    return '';
   }
 
   findMutualConnectionsForContainer(resultContainer) {
@@ -879,24 +903,35 @@ class LinkedInScraperHand {
         const name = (figure.getAttribute('aria-label') || '').replace(/'s profile picture$/i, '').trim();
         if (!name) continue;
 
-        const card = figure.closest('div[componentkey^="auto-component-"]') || figure.closest('div');
-        if (!card) continue;
-
-        const linkElement = card.querySelector('a[href*="/in/"]');
-        if (!linkElement) continue;
-
-        let profileUrl;
-        try {
-          profileUrl = new URL(linkElement.href, 'https://www.linkedin.com').pathname;
-        } catch {
-          profileUrl = linkElement.getAttribute('href').split('?')[0];
+        // Anchor URL to the <a> wrapping the figure (always this person's profile).
+        let profileUrl = null;
+        const figureLink = figure.closest('a[href*="/in/"]');
+        if (figureLink) {
+          try {
+            profileUrl = new URL(figureLink.href, 'https://www.linkedin.com').pathname;
+          } catch {
+            profileUrl = figureLink.getAttribute('href').split('?')[0];
+          }
         }
+        if (!profileUrl) {
+          const card = figure.closest('div[componentkey^="auto-component-"]') || figure.closest('div');
+          if (!card) continue;
+          const linkElement = card.querySelector('a[href*="/in/"]');
+          if (!linkElement) continue;
+          try {
+            profileUrl = new URL(linkElement.href, 'https://www.linkedin.com').pathname;
+          } catch {
+            profileUrl = linkElement.getAttribute('href').split('?')[0];
+          }
+        }
+        if (!profileUrl) continue;
 
         if (seenUrls.has(profileUrl)) continue;
         seenUrls.add(profileUrl);
 
+        const card = figure.closest('div[componentkey^="auto-component-"]') || figure.closest('div');
         const fullUrl = profileUrl.startsWith('http') ? profileUrl : 'https://www.linkedin.com' + profileUrl;
-        const headline = this.findHeadline(card);
+        const headline = card ? this.findHeadline(card, name) : '';
         profiles.push({ name, url: fullUrl, headline });
       } catch (error) {
         continue;

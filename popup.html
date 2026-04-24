@@ -624,6 +624,52 @@
     .modal-actions .button {
       margin-bottom: 0;
     }
+
+    .storage-warning {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      background: rgba(251, 191, 36, 0.1);
+      border: 1px solid rgba(251, 191, 36, 0.3);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 11px;
+      color: #fbbf24;
+    }
+
+    .storage-warning.critical {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #ef4444;
+    }
+
+    .storage-bar {
+      flex: 1;
+    }
+
+    .storage-bar-label {
+      margin-bottom: 4px;
+    }
+
+    .storage-bar-track {
+      height: 4px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .storage-bar-fill {
+      height: 100%;
+      background: #fbbf24;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    .storage-warning.critical .storage-bar-fill {
+      background: #ef4444;
+    }
   </style>
 </head>
 <body>
@@ -636,7 +682,17 @@
     <div class="status" id="status">
       Ready to scrape
     </div>
-    
+
+    <div class="storage-warning" id="storageWarning" style="display: none;">
+      <div class="storage-bar">
+        <div class="storage-bar-label" id="storageWarningText">Storage 70% full</div>
+        <div class="storage-bar-track">
+          <div class="storage-bar-fill" id="storageBarFill" style="width: 0%"></div>
+        </div>
+      </div>
+      <button class="timer-btn" id="storageExportBtn">Export & Clear</button>
+    </div>
+
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-number" id="connectionsCount">0</div>
@@ -675,7 +731,7 @@
           <span id="queueProgress">0 / 0</span> completed
         </div>
         <div class="break-timer" id="breakTimer" style="display: none;">
-          Break: <span id="breakTimeLeft">5:00</span>
+          <span id="breakTimerLabel">Break:</span> <span id="breakTimeLeft">5:00</span>
           <button class="timer-btn" id="skipBreak">Skip</button>
           <input type="number" id="breakMinutesInput" class="timer-input" min="1" max="999" placeholder="min">
           <button class="timer-btn" id="setBreakTime">Set</button>
@@ -736,6 +792,13 @@ https://www.linkedin.com/search/results/people/?connectionOf=..."
         <input type="checkbox" id="showNotifications" checked>
         <span>Show notifications</span>
       </label>
+      <label class="setting-item" style="margin-top: 8px;">
+        <input type="checkbox" id="longBreakMode">
+        <span>Long break mode (~1hr pause every ~4 profiles)</span>
+      </label>
+      <div id="sessionProgress" style="display: none; font-size: 10px; color: #6b7280; margin-top: 4px; padding-left: 20px;">
+        Session: <span id="sessionCount">0</span> / <span id="sessionTarget">4</span> profiles
+      </div>
     </div>
       
       <!-- Utility Actions -->
