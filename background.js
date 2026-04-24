@@ -26,7 +26,11 @@ class LinkedInScraperBrain {
     this.scraperWindowId = null;
     this.scraperTabId = null;
     this.QUEUE_BREAK_ALARM = 'queue_break_timer';
-    
+
+    this.longBreakMode = false;
+    this.sessionItemCount = 0;
+    this.sessionBreakAfter = this.randomSessionLength();
+
     this.setupEventListeners();
     this.loadPersistedState();
     console.log('LinkedIn Scraper Brain initialized');
@@ -94,6 +98,9 @@ class LinkedInScraperBrain {
           break;
         case 'deleteQueueItem':
           result = await this.deleteQueueItem(request.targetIndex);
+          break;
+        case 'setLongBreakMode':
+          result = await this.setLongBreakMode(request.enabled);
           break;
 
         case 'pushToDatabase':
@@ -372,12 +379,21 @@ class LinkedInScraperBrain {
       
       // Break between items
       if (this.queue.isRunning) {
-        await this.startBreakTimer();
-        
-        // Wait for break to complete
+        this.sessionItemCount++;
+
+        const doLongBreak = this.longBreakMode && this.sessionItemCount >= this.sessionBreakAfter;
+        if (doLongBreak) {
+          this.sessionItemCount = 0;
+          this.sessionBreakAfter = this.randomSessionLength();
+          await this.startLongBreakTimer();
+        } else {
+          await this.startBreakTimer();
+        }
+
         while (this.queue.breakEndTime && Date.now() < this.queue.breakEndTime && this.queue.isRunning) {
           await this.delay(5000);
         }
+        this.queue.isLongBreak = false;
       }
     }
     
@@ -552,7 +568,11 @@ class LinkedInScraperBrain {
     if (!this.scraperTabId) {
       throw new Error("No scraper tab available");
     }
-    
+
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+
     console.log(`Navigating to ${url.substring(0, 100)}...`);
     await chrome.tabs.update(this.scraperTabId, { url: url, active: false });
   }
@@ -665,41 +685,34 @@ class LinkedInScraperBrain {
     }
 
     try {
-      const result = await this.getStorageData(['totalExtracted', 'allExtractedProfiles', 'extractedCombinations', 'csvMergeData']);
+      const result = await this.getStorageData(['totalExtracted', 'allExtractedProfiles', 'csvMergeData']);
       let totalExtracted = result.totalExtracted || 0;
-      let allExtractedProfiles = Array.isArray(result.allExtractedProfiles) ? result.allExtractedProfiles : [];
-      const extractedCombinations = new Set(result.extractedCombinations || []);
       const csvMergeData = result.csvMergeData || {};
 
-      const indexMap = new Map();
-      allExtractedProfiles.forEach((profile, index) => {
-        if (profile?.url) {
-          indexMap.set(`${profile.url}|${profile.source}`, index);
+      // One-time migration: absorb legacy allExtractedProfiles into csvMergeData, then drop it
+      if (Array.isArray(result.allExtractedProfiles) && result.allExtractedProfiles.length > 0) {
+        for (const profile of result.allExtractedProfiles) {
+          if (profile?.url) {
+            const key = `${profile.url}|${profile.source}`;
+            if (!csvMergeData[key]) csvMergeData[key] = profile;
+          }
         }
-      });
+        await this.removeStorageData(['allExtractedProfiles', 'extractedCombinations']);
+      }
 
       let newCount = 0;
       let updatedCount = 0;
 
       for (const originalProfile of dataArray) {
-        if (!originalProfile?.url) {
-          continue;
-        }
-
+        if (!originalProfile?.url) continue;
         const timestamp = originalProfile.timestamp || new Date().toISOString();
         const profile = { ...originalProfile, timestamp };
         const key = `${profile.url}|${profile.source}`;
 
-        extractedCombinations.add(key);
-
-        if (indexMap.has(key)) {
-          const existingIndex = indexMap.get(key);
-          allExtractedProfiles[existingIndex] = profile;
+        if (csvMergeData[key]) {
           csvMergeData[key] = profile;
           updatedCount++;
         } else {
-          allExtractedProfiles.push(profile);
-          indexMap.set(key, allExtractedProfiles.length - 1);
           csvMergeData[key] = profile;
           newCount++;
         }
@@ -712,23 +725,26 @@ class LinkedInScraperBrain {
           totalExtracted += newCount;
           this.updateBadge(totalExtracted.toString());
         }
-
-        await this.setStorageData({
-          totalExtracted,
-          allExtractedProfiles,
-          extractedCombinations: Array.from(extractedCombinations),
-          csvMergeData
-        });
+        await this.setStorageData({ totalExtracted, csvMergeData });
       }
 
-      return {
-        success: true,
-        saved: newCount,
-        updated: updatedCount,
-        duplicates: duplicatesCount
-      };
+      return { success: true, saved: newCount, updated: updatedCount, duplicates: duplicatesCount };
     } catch (error) {
       return { success: false, error: error.message };
+    }
+  }
+
+  async getStoragePercent() {
+    try {
+      const bytesInUse = await new Promise((resolve, reject) => {
+        chrome.storage.local.getBytesInUse(null, (bytes) => {
+          if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+          else resolve(bytes);
+        });
+      });
+      return Math.round((bytesInUse / (10 * 1024 * 1024)) * 100);
+    } catch {
+      return 0;
     }
   }
 
@@ -747,7 +763,9 @@ class LinkedInScraperBrain {
       const queueData = {
         ...this.queue,
         scraperWindowId: this.scraperWindowId,
-        scraperTabId: this.scraperTabId
+        scraperTabId: this.scraperTabId,
+        sessionItemCount: this.sessionItemCount,
+        sessionBreakAfter: this.sessionBreakAfter
       };
       await this.setStorageData({ persistentQueue: queueData });
     } catch (error) {
@@ -757,30 +775,59 @@ class LinkedInScraperBrain {
 
   async loadPersistedState() {
     try {
-      const result = await this.getStorageData(['persistentQueue', 'totalExtracted']);
-      
+      const result = await this.getStorageData(['persistentQueue', 'totalExtracted', 'longBreakMode']);
+
       if (result.persistentQueue) {
         this.queue = { ...this.queue, ...result.persistentQueue };
         this.scraperWindowId = result.persistentQueue.scraperWindowId || null;
         this.scraperTabId = result.persistentQueue.scraperTabId || null;
+        this.sessionItemCount = result.persistentQueue.sessionItemCount || 0;
+        this.sessionBreakAfter = result.persistentQueue.sessionBreakAfter || this.randomSessionLength();
       }
-      
+
+      this.longBreakMode = result.longBreakMode || false;
+
       if (result.totalExtracted) {
         this.updateBadge(result.totalExtracted.toString());
       }
-      
+
     } catch (error) {
       console.error('Error loading persisted state:', error);
     }
   }
 
+  randomSessionLength() {
+    return 3 + Math.floor(Math.random() * 3); // 3, 4, or 5
+  }
+
   async startBreakTimer() {
     const breakMinutes = 4 + Math.random() * 3;
     const breakEndTime = Date.now() + (breakMinutes * 60 * 1000);
-    console.log(`Starting ${Math.ceil(breakMinutes)} minute break`);
+    console.log(`Starting ${Math.ceil(breakMinutes)} minute short break`);
     this.queue.breakEndTime = breakEndTime;
+    this.queue.isLongBreak = false;
     await this.saveQueue();
     chrome.alarms.create(this.QUEUE_BREAK_ALARM, { when: breakEndTime });
+  }
+
+  async startLongBreakTimer() {
+    const breakMinutes = 50 + Math.random() * 30; // 50–80 minutes
+    const breakEndTime = Date.now() + (breakMinutes * 60 * 1000);
+    console.log(`Starting ${Math.ceil(breakMinutes)} minute long break (session reset)`);
+    this.queue.breakEndTime = breakEndTime;
+    this.queue.isLongBreak = true;
+    await this.saveQueue();
+    chrome.alarms.create(this.QUEUE_BREAK_ALARM, { when: breakEndTime });
+  }
+
+  async setLongBreakMode(enabled) {
+    this.longBreakMode = enabled;
+    if (!enabled) {
+      this.sessionItemCount = 0;
+      this.sessionBreakAfter = this.randomSessionLength();
+    }
+    await this.setStorageData({ longBreakMode: enabled });
+    return { success: true };
   }
 
   async handleAlarm(alarm) {
@@ -793,11 +840,14 @@ class LinkedInScraperBrain {
 
   async stopQueueAutomation() {
     this.queue.isRunning = false;
+    this.queue.isLongBreak = false;
     await chrome.alarms.clear(this.QUEUE_BREAK_ALARM);
     this.queue.breakEndTime = null;
-    
+    this.sessionItemCount = 0;
+    this.sessionBreakAfter = this.randomSessionLength();
+
     await this.stopSilentAudio();
-    
+
     this.scraperWindowId = null;
     this.scraperTabId = null;
     await this.saveQueue();
@@ -816,10 +866,15 @@ class LinkedInScraperBrain {
   async getQueueStatus() {
     const alarms = await chrome.alarms.getAll();
     const breakAlarm = alarms.find(a => a.name === this.QUEUE_BREAK_ALARM);
-    return { 
-      success: true, 
-      queue: this.queue, 
-      breakEndTime: breakAlarm ? breakAlarm.scheduledTime : null 
+    const storagePercent = await this.getStoragePercent();
+    return {
+      success: true,
+      queue: this.queue,
+      breakEndTime: breakAlarm ? breakAlarm.scheduledTime : null,
+      storagePercent,
+      longBreakMode: this.longBreakMode,
+      sessionItemCount: this.sessionItemCount,
+      sessionBreakAfter: this.sessionBreakAfter
     };
   }
 

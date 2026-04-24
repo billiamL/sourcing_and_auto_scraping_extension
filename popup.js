@@ -99,7 +99,20 @@ class LinkedInScraperPopup {
       pushToDatabase: document.getElementById('pushToDatabase'),
       debugPage: document.getElementById('debugPage'),
       clearMemory: document.getElementById('clearMemory'),
-      clearData: document.getElementById('clearData')
+      clearData: document.getElementById('clearData'),
+
+      // Storage warning
+      storageWarning: document.getElementById('storageWarning'),
+      storageWarningText: document.getElementById('storageWarningText'),
+      storageBarFill: document.getElementById('storageBarFill'),
+      storageExportBtn: document.getElementById('storageExportBtn'),
+
+      // Long break mode
+      longBreakMode: document.getElementById('longBreakMode'),
+      sessionProgress: document.getElementById('sessionProgress'),
+      sessionCount: document.getElementById('sessionCount'),
+      sessionTarget: document.getElementById('sessionTarget'),
+      breakTimerLabel: document.getElementById('breakTimerLabel')
     };
 
     const missingElements = [];
@@ -148,6 +161,8 @@ class LinkedInScraperPopup {
     this.elements.debugPage.addEventListener('click', () => this.debugCurrentPage());
     this.elements.clearMemory.addEventListener('click', () => this.clearMemoryOnly());
     this.elements.clearData.addEventListener('click', () => this.clearAllData());
+    this.elements.storageExportBtn.addEventListener('click', () => this.exportAndClear());
+    this.elements.longBreakMode.addEventListener('change', () => this.toggleLongBreakMode());
   }
 
   // =============================================
@@ -841,7 +856,7 @@ class LinkedInScraperPopup {
 
       const oldIsRunning = this.queue.isRunning;
       this.queue = response.queue;
-      const newBreakTime = response.breakEndTime; 
+      const newBreakTime = response.breakEndTime;
 
       if (newBreakTime && newBreakTime > Date.now()) {
         this.queue.breakEndTime = newBreakTime;
@@ -852,17 +867,82 @@ class LinkedInScraperPopup {
         this.elements.breakTimer.style.display = 'none';
         this.stopBreakDisplayTimer();
       }
-      
+
       if (oldIsRunning !== this.queue.isRunning) {
         this.updateAllUI();
       }
-      
+
       this.renderQueueList();
+      this.updateStorageWarning(response.storagePercent || 0);
+      this.updateLongBreakUI(response);
 
     } catch (error) {
       if (error.message && !error.message.includes('Could not establish connection')) {
         console.warn('Sync with background failed:', error.message);
       }
+    }
+  }
+
+  updateStorageWarning(percent) {
+    if (percent < 70) {
+      this.elements.storageWarning.style.display = 'none';
+      return;
+    }
+
+    const isCritical = percent >= 90;
+    this.elements.storageWarning.style.display = 'flex';
+    this.elements.storageWarning.className = `storage-warning${isCritical ? ' critical' : ''}`;
+    this.elements.storageWarningText.textContent = `Storage ${percent}% full${isCritical ? ' — auto-exporting!' : ' — export soon'}`;
+    this.elements.storageBarFill.style.width = `${Math.min(percent, 100)}%`;
+    this.elements.storageExportBtn.textContent = 'Export & Clear';
+
+    if (isCritical && !this._autoExportPending) {
+      this._autoExportPending = true;
+      if (this.queue.isRunning) {
+        this.stopQueue();
+      }
+      this.exportAndClear().finally(() => { this._autoExportPending = false; });
+    }
+  }
+
+  updateLongBreakUI(response) {
+    const enabled = response.longBreakMode || false;
+    this.elements.longBreakMode.checked = enabled;
+
+    if (enabled && this.queue.isRunning) {
+      this.elements.sessionProgress.style.display = 'block';
+      this.elements.sessionCount.textContent = response.sessionItemCount || 0;
+      this.elements.sessionTarget.textContent = response.sessionBreakAfter || 4;
+    } else {
+      this.elements.sessionProgress.style.display = 'none';
+    }
+
+    if (this.elements.breakTimerLabel) {
+      this.elements.breakTimerLabel.textContent = (this.queue.isLongBreak ? 'Long Break:' : 'Break:');
+    }
+  }
+
+  async toggleLongBreakMode() {
+    const enabled = this.elements.longBreakMode.checked;
+    try {
+      await chrome.runtime.sendMessage({ action: 'setLongBreakMode', enabled });
+    } catch (error) {
+      console.error('Failed to set long break mode:', error);
+    }
+  }
+
+  async exportAndClear() {
+    await this.exportToCSV();
+    if (!confirm('Export complete. Clear all stored data to free up space?')) return;
+    try {
+      await this.chromeAPI(() => chrome.storage.local.clear());
+      this.data.myConnections = [];
+      this.data.totalExtracted = 0;
+      this.elements.storageWarning.style.display = 'none';
+      this.updateAllUI();
+      this.setStatus('ready', 'Data exported and cleared');
+    } catch (error) {
+      this.setStatus('error', `Clear failed: ${error.message}`);
     }
   }
 
@@ -912,6 +992,9 @@ class LinkedInScraperPopup {
       .map(url => url.trim())
       .filter(url => url && url.includes('linkedin.com'))
       .map(url => {
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+          url = 'https://' + url;
+        }
         const isProfileUrl = url.includes('/in/');
         
         return {
@@ -996,12 +1079,13 @@ class LinkedInScraperPopup {
 
   async loadSettings() {
     try {
-      const result = await this.chromeStorage('get', ['showNotifications', 'queueExpanded']);
-      
+      const result = await this.chromeStorage('get', ['showNotifications', 'queueExpanded', 'longBreakMode']);
+
       this.settings.showNotifications = result.showNotifications !== false;
       this.settings.queueExpanded = result.queueExpanded || false;
-      
+
       this.elements.showNotifications.checked = this.settings.showNotifications;
+      this.elements.longBreakMode.checked = result.longBreakMode || false;
       
       if (this.settings.queueExpanded || this.queue.items.length > 0) {
         this.elements.queueInputSection.style.display = 'block';
@@ -1308,26 +1392,15 @@ class LinkedInScraperPopup {
     try {
       this.setStatus('working', 'Generating CSV...');
       
-      const result = await this.chromeStorage('get', ['allExtractedProfiles', 'csvMergeData']);
-      
-      const memoryProfiles = result.allExtractedProfiles || [];
-      const persistentData = result.csvMergeData || {};
-      
-      if (memoryProfiles.length === 0 && Object.keys(persistentData).length === 0) {
+      const result = await this.chromeStorage('get', ['csvMergeData']);
+      const allData = result.csvMergeData || {};
+
+      if (Object.keys(allData).length === 0) {
         this.setStatus('error', 'No data to export');
         return;
       }
-      
-      const combinedData = { ...persistentData };
-      
-      for (const profile of memoryProfiles) {
-        const uniqueKey = `${profile.url}|${profile.source}`;
-        if (!combinedData[uniqueKey] || new Date(profile.timestamp) > new Date(combinedData[uniqueKey].timestamp)) {
-          combinedData[uniqueKey] = profile;
-        }
-      }
-      
-      const allProfiles = Object.values(combinedData);
+
+      const allProfiles = Object.values(allData);
       allProfiles.sort((a, b) => {
         if (a.source !== b.source) return a.source.localeCompare(b.source);
         return a.name.localeCompare(b.name);
@@ -1413,7 +1486,7 @@ class LinkedInScraperPopup {
       this.data.myConnections = [];
       this.data.totalExtracted = 0;
       
-      await this.chromeStorage('remove', ['myConnections', 'totalExtracted', 'allExtractedProfiles', 'extractedCombinations']);
+      await this.chromeStorage('remove', ['myConnections', 'totalExtracted', 'allExtractedProfiles', 'extractedCombinations', 'csvMergeData']);
       
       this.setStatus('ready', 'Memory cleared');
       this.updateAllUI();
